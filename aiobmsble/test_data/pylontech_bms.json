@@ -13,7 +13,7 @@
     "_comments": [
       "Pylontech RT12100G31 (S/N K220924000710003)",
       "Advertisement captured when device is unpaired (shows standard HID/Battery profiles)",
-      "local_name pattern: RT12[0-9]+-[0-9]+"
+      "local_name pattern: RT[0-9]* matches RT12100, RT24100, RT48100 etc."
     ]
   },
   {
