@@ -99,11 +99,15 @@ TX_UUID: Final[str] = BMS.uuid_tx()
 
 def ref_value() -> BMSSample:
     """Return the expected BMSSample for the reference register values above."""
+    # cycle_charge = 100 Ah * 91% SoC = 91.0 Ah
+    # cycle_capacity = 13.24 V * 91.0 Ah = 1204.84 Wh (calculated by BaseBMS)
     return {
         "voltage":          13.24,
         "current":          -4.8,
         "power":            round(13.24 * -4.8, 3),
         "battery_level":    91,
+        "cycle_charge":     91.0,
+        "cycle_capacity":   round(13.24 * 91.0, 3),
         "temp_values":      [15.0, 15.0],
         "temperature":      15.0,
         "cell_voltages":    [3.312, 3.311],
@@ -113,6 +117,7 @@ def ref_value() -> BMSSample:
         "total_charge":     296.0,
         "battery_charging": False,
         "problem":          False,
+        "runtime":          int(91.0 / 4.8 * 3600),
     }
 
 
