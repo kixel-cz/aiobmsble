@@ -61,6 +61,9 @@ class BMS(BaseBMS):
     _BLOCK_START: Final[int] = _REG_VOLTAGE
     _BLOCK_COUNT: Final[int] = _REG_CYCLES - _REG_VOLTAGE + 1  # 9
 
+    # Nominal capacity of the RT12100 battery in Ah
+    _NOMINAL_CAPACITY_AH: Final[float] = 100.0
+
     def __init__(
         self,
         ble_device: BLEDevice,
@@ -236,7 +239,7 @@ class BMS(BaseBMS):
             "cell_voltages":  [cell_v_max, cell_v_min],
             "cycles":         cycles,
             # cycle_charge [Ah] lets BaseBMS calculate cycle_capacity [Wh] automatically
-            "cycle_charge":   round(_NOMINAL_CAPACITY_AH * soc / 100.0, 1),
+            "cycle_charge":   round(BMS._NOMINAL_CAPACITY_AH * soc / 100.0, 1),
         }
 
         # Lifetime accumulated energy (separate register, outside main block)
