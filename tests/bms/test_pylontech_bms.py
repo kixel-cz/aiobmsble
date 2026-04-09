@@ -271,3 +271,94 @@ async def test_energy_unavailable(
     assert "voltage" in result
     assert "total_charge" not in result
     await bms.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Model name parsing tests
+# ---------------------------------------------------------------------------
+
+import pytest
+
+@pytest.mark.parametrize(
+    ("name", "expected_voltage", "expected_capacity", "expected_cells"),
+    [
+        ("RT12100-710003", 12, 100, 4),  # validated device
+        ("RT12200-000001", 12, 200, 4),  # 12V 200Ah
+        ("RT24100-000001", 24, 100, 8),  # 24V 100Ah
+        ("RT48100-000001", 48, 100, 16), # 48V 100Ah
+        ("RT36050-000001", 36, 50,  12), # 36V  50Ah
+        ("GModule",        12, 100, 4),  # Telink default name -> fallback
+        ("",               12, 100, 4),  # empty -> fallback
+    ],
+    ids=["RT12100", "RT12200", "RT24100", "RT48100", "RT36050", "GModule", "empty"],
+)
+def test_parse_model(
+    name: str,
+    expected_voltage: int,
+    expected_capacity: int,
+    expected_cells: int,
+) -> None:
+    """Test that model name is correctly parsed to voltage, capacity and cell count."""
+    voltage, capacity, cells = BMS._parse_model(name)
+    assert voltage   == expected_voltage
+    assert capacity  == expected_capacity
+    assert cells     == expected_cells
+
+
+async def test_capacity_from_device_name(patch_bleak_client) -> None:
+    """Test that capacity is correctly set from the BLE device name."""
+    patch_bleak_client(MockPylontechBleakClient)
+
+    # RT12100 -> 100 Ah
+    bms_100 = BMS(generate_ble_device(name="RT12100-710003"))
+    assert bms_100._capacity_ah == 100
+    assert bms_100._cell_count  == 4
+
+    # RT12200 -> 200 Ah
+    bms_200 = BMS(generate_ble_device(name="RT12200-000001"))
+    assert bms_200._capacity_ah == 200
+    assert bms_200._cell_count  == 4
+
+    # GModule -> fallback to 100 Ah
+    bms_gmod = BMS(generate_ble_device(name="GModule"))
+    assert bms_gmod._capacity_ah == 100
+    assert bms_gmod._cell_count  == 4
+
+
+# ---------------------------------------------------------------------------
+# Matcher pattern tests
+# ---------------------------------------------------------------------------
+
+import re
+from fnmatch import translate
+
+
+@pytest.mark.parametrize(
+    ("local_name", "should_match"),
+    [
+        ("RT12100-710003", True),   # standard RT12100
+        ("RT12200-000001", True),   # RT12200 variant
+        ("RT24100-000001", True),   # 24V variant
+        ("RT48100-000001", True),   # 48V variant
+        ("RT36050-000001", True),   # 36V variant
+        ("GModule",        True),   # Telink default name (second matcher)
+        ("RT-fake",        False),  # RT without digits
+        ("SomeOther",      False),  # unrelated device
+        ("",               False),  # empty name
+    ],
+    ids=[
+        "RT12100", "RT12200", "RT24100", "RT48100", "RT36050",
+        "GModule", "RT-no-digits", "unrelated", "empty",
+    ],
+)
+def test_matcher_covers_rt_variants(local_name: str, should_match: bool) -> None:
+    """Test that matcher_dict_list covers all RT voltage/capacity variants."""
+    from aiobmsble.utils import _advertisement_matches
+    from aiobmsble.test_data import adv_dict_to_advdata
+
+    adv = adv_dict_to_advdata({"local_name": local_name} if local_name else {})
+    matched = any(
+        _advertisement_matches(m, adv, "")
+        for m in BMS.matcher_dict_list()
+    )
+    assert matched is should_match
