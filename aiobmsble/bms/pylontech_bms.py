@@ -140,7 +140,7 @@ class BMS(BaseBMS):
         """
         return [
             {
-                "local_name": "RT12*",
+                "local_name": "RT[0-9]*",
                 "connectable": True,
             },
             {
