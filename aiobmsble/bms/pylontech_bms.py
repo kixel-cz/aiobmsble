@@ -1,4 +1,4 @@
-"""Module to support Pylontech RT12100 BMS.
+"""Module to support Pylontech RT-series BMS (RT12100, RT12200, RT24100, ...).
 
 Project: aiobmsble, https://pypi.org/p/aiobmsble/
 
@@ -20,6 +20,8 @@ Register map (Modbus FC=0x03, device address=1):
   0x1020: total energy  uint16  x0.1    kWh (lifetime accumulated)
   0x2000: serial number ASCII, 16 chars across 8 registers
 
+Capacity and cell count are derived from the model number encoded in the BLE
+device name (e.g. "RT12100" -> 12V / 4 cells / 100Ah) or serial number prefix.
 Validated on: Pylontech RT12100G31 (S/N K220924000710003)
 """
 
@@ -38,7 +40,7 @@ class BMS(BaseBMS):
 
     INFO: BMSInfo = {
         "default_manufacturer": "Pylontech",
-        "default_model": "RT12100",
+        "default_model": "RT series",
     }
 
     # Modbus device address
@@ -61,8 +63,41 @@ class BMS(BaseBMS):
     _BLOCK_START: Final[int] = _REG_VOLTAGE
     _BLOCK_COUNT: Final[int] = _REG_CYCLES - _REG_VOLTAGE + 1  # 9
 
-    # Nominal capacity of the RT12100 battery in Ah
-    _NOMINAL_CAPACITY_AH: Final[float] = 100.0
+    # Fallback capacity when model cannot be determined from name/serial
+    _DEFAULT_CAPACITY_AH: Final[float] = 100.0
+
+    # Lookup table: voltage (V) -> number of LFP cells in series
+    # All Pylontech RT batteries use 3.2V nominal LFP cells
+    _VOLTAGE_TO_CELLS: Final[dict[int, int]] = {
+        12: 4,   # 12V  = 4S
+        24: 8,   # 24V  = 8S
+        36: 12,  # 36V  = 12S
+        48: 16,  # 48V  = 16S
+    }
+
+    @staticmethod
+    def _parse_model(name: str) -> tuple[int, int, int]:
+        """Extract (voltage, capacity_ah, cell_count) from device name or serial number.
+
+        Device name format:  "RT{voltage}{capacity}-{serial}"
+          e.g. "RT12100-710003" -> voltage=12, capacity=100, cells=4
+               "RT24100-000001" -> voltage=24, capacity=100, cells=8
+
+        Serial number prefix: first character encodes generation/family but
+        not the model — use device name as primary source.
+
+        Returns a tuple of (voltage_v, capacity_ah, cell_count).
+        Falls back to (12, 100, 4) if parsing fails.
+        """
+        import re
+        # Match "RT{vv}{ccc}" at the start, e.g. RT12100, RT24100, RT12200
+        m = re.search(r"RT(\d{2})(\d+)", name or "")
+        if m:
+            voltage_v    = int(m.group(1))
+            capacity_ah  = int(m.group(2))
+            cell_count   = BMS._VOLTAGE_TO_CELLS.get(voltage_v, 4)
+            return voltage_v, capacity_ah, cell_count
+        return 12, 100, 4  # safe fallback for RT12100
 
     def __init__(
         self,
@@ -75,6 +110,16 @@ class BMS(BaseBMS):
         super().__init__(ble_device, keep_alive, secret, logger_name)
         self._msg: bytes = b""
         self._exp_len: int = 0  # expected response length in bytes
+
+        # Derive capacity and cell count from the BLE device name when available.
+        # The name "RT12100-XXXXXX" encodes voltage and capacity directly.
+        # Falls back to defaults when name is "GModule" (Telink default).
+        _dev_name: str = ble_device.name or ""
+        _, self._capacity_ah, self._cell_count = BMS._parse_model(_dev_name)
+        self._log.debug(
+            "model parsed from name '%s': capacity=%dAh cells=%d",
+            _dev_name, self._capacity_ah, self._cell_count,
+        )
 
     # ------------------------------------------------------------------
     # Static interface required by BaseBMS
@@ -239,7 +284,7 @@ class BMS(BaseBMS):
             "cell_voltages":  [cell_v_max, cell_v_min],
             "cycles":         cycles,
             # cycle_charge [Ah] lets BaseBMS calculate cycle_capacity [Wh] automatically
-            "cycle_charge":   round(BMS._NOMINAL_CAPACITY_AH * soc / 100.0, 1),
+            "cycle_charge":   round(self._capacity_ah * soc / 100.0, 1),
         }
 
         # Lifetime accumulated energy (separate register, outside main block)
