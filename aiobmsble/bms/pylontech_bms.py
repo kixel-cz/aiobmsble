@@ -235,11 +235,12 @@ class BMS(BaseBMS):
             "temp_values":    [round(temp_max, 1), round(temp_min, 1)],
             "cell_voltages":  [cell_v_max, cell_v_min],
             "cycles":         cycles,
-            # SOH stored as extra key — not a standard BMSSample key but useful
-            # "soh": soh,
+            # cycle_charge [Ah] lets BaseBMS calculate cycle_capacity [Wh] automatically
+            "cycle_charge":   round(_NOMINAL_CAPACITY_AH * soc / 100.0, 1),
         }
 
         # Lifetime accumulated energy (separate register, outside main block)
+        # Scale: x0.1 kWh — stored as total_charge for informational purposes
         await self._await_msg(BMS._cmd(BMS._REG_ENERGY, 1))
         e_regs = self._parse_regs(self._msg, 1)
         if e_regs:
