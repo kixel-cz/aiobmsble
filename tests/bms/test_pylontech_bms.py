@@ -257,17 +257,19 @@ async def test_invalid_response(
 async def test_energy_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     patch_bleak_client,
+    patch_bms_timeout,
 ) -> None:
-    """Test that missing energy register does not crash the update."""
-    # Remove energy response — BMS should still return data, just without total_charge
+    """Test that a timeout on the energy register does not crash the update."""
+    # Remove energy response — _await_msg will timeout but update must still succeed
     resp_without_energy = {
         k: v for k, v in MockPylontechBleakClient.RESP.items() if k != _REQ_ENERGY
     }
     monkeypatch.setattr(MockPylontechBleakClient, "RESP", resp_without_energy)
+    patch_bms_timeout()  # speed up retries
     patch_bleak_client(MockPylontechBleakClient)
     bms = BMS(generate_ble_device())
     result = await bms.async_update()
-    # Should succeed but total_charge will be absent
+    # Main data must be present, total_charge absent (energy register timed out)
     assert "voltage" in result
     assert "total_charge" not in result
     await bms.disconnect()
@@ -362,3 +364,33 @@ def test_matcher_covers_rt_variants(local_name: str, should_match: bool) -> None
         for m in BMS.matcher_dict_list()
     )
     assert matched is should_match
+
+
+# ---------------------------------------------------------------------------
+# _parse_regs unit tests (covers remaining branches)
+# ---------------------------------------------------------------------------
+
+def test_parse_regs_exception_response() -> None:
+    """Test that Modbus exception response (FC|0x80) returns None."""
+    exc = _mb_exception(0x02)
+    assert BMS._parse_regs(bytes(exc), 1) is None
+
+
+def test_parse_regs_wrong_fc() -> None:
+    """Test that wrong function code returns None."""
+    data = bytearray([0x01, 0x04, 0x02, 0x00, 0x01])  # FC=0x04, not 0x03
+    crc = crc_modbus(bytes(data))
+    data.extend(crc.to_bytes(2, "little"))
+    assert BMS._parse_regs(bytes(data), 1) is None
+
+
+async def test_notification_handler_bad_sof(patch_bleak_client) -> None:
+    """Test that _notification_handler discards frames with wrong device address."""
+    patch_bleak_client(MockPylontechBleakClient)
+    bms = BMS(generate_ble_device())
+    await bms._connect()
+    # Inject a frame starting with wrong device address (0x02 instead of 0x01)
+    bad_frame = bytearray([0x02, 0x03, 0x02, 0x00, 0x5B, 0x00, 0x00])
+    bms._notification_handler(None, bad_frame)  # type: ignore[arg-type]
+    assert len(bms._frame) == 0  # frame must be cleared
+    await bms.disconnect()
