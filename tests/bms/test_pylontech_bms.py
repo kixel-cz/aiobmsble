@@ -106,6 +106,7 @@ def ref_value() -> BMSSample:
         "current":          -4.8,
         "power":            round(13.24 * -4.8, 3),
         "battery_level":    91,
+        "battery_health":   99,
         "cycle_charge":     91.0,
         "cycle_capacity":   round(13.24 * 91.0, 3),
         "temp_values":      [15.0, 15.0],
