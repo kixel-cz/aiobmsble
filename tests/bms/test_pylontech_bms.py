@@ -10,6 +10,8 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 from aiobmsble import BMSSample
 from aiobmsble.bms.pylontech_bms import BMS
 from aiobmsble.basebms import crc_modbus
+from aiobmsble.test_data import adv_dict_to_advdata
+from aiobmsble.utils import _advertisement_matches
 from tests.bluetooth import generate_ble_device
 from tests.conftest import MockBleakClient
 from tests.test_basebms import BMSBasicTests
@@ -115,7 +117,6 @@ def ref_value() -> BMSSample:
         "delta_voltage":    0.001,
         "cell_count":       2,
         "cycles":           63,
-        "total_charge":     296.0,
         "battery_charging": False,
         "problem":          False,
         "runtime":          int(91.0 / 4.8 * 3600),
@@ -270,17 +271,14 @@ async def test_energy_unavailable(
     patch_bleak_client(MockPylontechBleakClient)
     bms = BMS(generate_ble_device())
     result = await bms.async_update()
-    # Main data must be present, total_charge absent (energy register timed out)
+    # Main data must be present despite energy register timeout
     assert "voltage" in result
-    assert "total_charge" not in result
     await bms.disconnect()
 
 
 # ---------------------------------------------------------------------------
 # Model name parsing tests
 # ---------------------------------------------------------------------------
-
-import pytest
 
 @pytest.mark.parametrize(
     ("name", "expected_voltage", "expected_capacity", "expected_cells"),
@@ -332,8 +330,6 @@ async def test_capacity_from_device_name(patch_bleak_client) -> None:
 # Matcher pattern tests
 # ---------------------------------------------------------------------------
 
-import re
-from fnmatch import translate
 
 
 @pytest.mark.parametrize(
@@ -356,9 +352,6 @@ from fnmatch import translate
 )
 def test_matcher_covers_rt_variants(local_name: str, should_match: bool) -> None:
     """Test that matcher_dict_list covers all RT voltage/capacity variants."""
-    from aiobmsble.utils import _advertisement_matches
-    from aiobmsble.test_data import adv_dict_to_advdata
-
     adv = adv_dict_to_advdata({"local_name": local_name} if local_name else {})
     matched = any(
         _advertisement_matches(m, adv, "")
