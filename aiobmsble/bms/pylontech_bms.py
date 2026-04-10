@@ -288,12 +288,15 @@ class BMS(BaseBMS):
         }
 
         # Lifetime accumulated energy (separate register, outside main block)
-        # Scale: x0.1 kWh — optional, BMS may not respond if register is unsupported
+        # Scale: x0.1 kWh — informational only, logged but not in BMSSample
+        # (BMSSample.total_charge expects Ah, not kWh)
         try:
             await self._await_msg(BMS._cmd(BMS._REG_ENERGY, 1))
             e_regs = self._parse_regs(self._msg, 1)
             if e_regs:
-                result["total_charge"] = int(e_regs[0] * 0.1)  # kWh (rounded down)
+                self._log.debug(
+                    "lifetime energy: %.1f kWh", e_regs[0] * 0.1
+                )
         except TimeoutError:
             self._log.debug("Energy register not available, skipping")
 
