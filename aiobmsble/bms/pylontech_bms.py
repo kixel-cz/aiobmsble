@@ -8,20 +8,35 @@ BLE characteristics:
   TX (write):   0x..2b11  "Gmodule SPP: Phone->Module"
 
 Register map (Modbus FC=0x03, device address=1):
-  0x1016: voltage       uint16  x0.01   V
-  0x1017: current       int16   x0.1    A   (negative = discharging)
-  0x1018: max cell V    uint16  x0.001  V
-  0x1019: min cell V    uint16  x0.001  V
-  0x101A: max temp      int16   x0.1    degC
-  0x101B: min temp      int16   x0.1    degC
-  0x101C: SoC           uint16  x1      %
-  0x101D: SOH           uint16  x1      %
-  0x101E: cycle count   uint16  x1
-  0x1020: total energy  uint16  x0.1    kWh (lifetime accumulated)
-  0x2000: serial number ASCII, 16 chars across 8 registers
+  Contiguous main block 0x1016–0x101E (9 registers):
+  0x1016: voltage       uint16  ×0.01   V
+  0x1017: current       int16   ×0.1    A   (negative = discharging)
+  0x1018: max cell V    uint16  ×0.001  V
+  0x1019: min cell V    uint16  ×0.001  V
+  0x101A: max temp      int16   ×0.1    °C
+  0x101B: min temp      int16   ×0.1    °C
+  0x101C: SoC           uint16  ×1      %
+  0x101D: SoH           uint16  ×1      %
+  0x101E: power         uint16  ×1      W   (absolute, no sign; equals V × |I|)
+  0x101F: unknown        – always 0 in all measurements, skipped
+  0x1020: lifetime kWh   uint16  ×0.1    kWh (accumulated, e.g. 2976=297.6 kWh)
+  0x1021: allowed current uint16  ×0.1    A   (BMS dynamic limit; 300=30A when
+                                             charging, 100=10A when discharging)
+  0x1022: design cap     uint16  ×0.1    Ah  (1000 = 100.0 Ah for RT12100)
+  0x1023: chg V limit    uint16  ×0.01   V   (1410 = 14.10 V)
+  0x1024: dischg cutoff  uint16  ×0.01   V   (1080 = 10.80 V)
+  0x2000: serial number  ASCII, 16 chars across 8 registers (0x2000–0x2007)
+  0x2008: GModule config – Telink TLSR8266 internal params, not BMS data
 
 Capacity and cell count are derived from the model number encoded in the BLE
-device name (e.g. "RT12100" -> 12V / 4 cells / 100Ah) or serial number prefix.
+device name (e.g. "RT12100" → 12 V / 4 cells / 100 Ah) or serial number prefix.
+
+Note on cell_voltages / temp_values:
+  Modbus registers 0x1018–0x101B expose only min/max aggregates, not per-cell
+  or per-sensor raw values.  We expose them as a two-element list
+  [max_value, min_value] so HA sensors and delta_voltage calculation remain
+  consistent with other BMS plugins.
+
 Validated on: Pylontech RT12100G31 (S/N K220924000710003)
 """
 
@@ -32,12 +47,12 @@ from typing import Final
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
 
-from aiobmsble import BMSInfo, BMSSample, MatcherPattern
+from aiobmsble import BMSDp, BMSInfo, BMSSample, MatcherPattern
 from aiobmsble.basebms import BaseBMS, crc_modbus
 
 
 class BMS(BaseBMS):
-    """Pylontech RT12100 BMS implementation."""
+    """Pylontech RT series BMS implementation."""
 
     INFO: BMSInfo = {
         "default_manufacturer": "Pylontech",
@@ -56,48 +71,122 @@ class BMS(BaseBMS):
     _REG_TEMP_MIN: Final[int] = 0x101B
     _REG_SOC:      Final[int] = 0x101C
     _REG_SOH:      Final[int] = 0x101D
-    _REG_CYCLES:   Final[int] = 0x101E
-    _REG_ENERGY:   Final[int] = 0x1020
-    _REG_SN:       Final[int] = 0x2000
+    _REG_POWER:    Final[int] = 0x101E  # absolute power W (sign-less)
+    # 0x101F: unknown – always 0 in measurements, skipped
+    _REG_ENERGY:   Final[int] = 0x1020  # lifetime accumulated energy ×0.1 kWh
+    # 0x1021: unknown (possibly max charge current or MPPT-related)
+    _REG_DESIGN_CAP: Final[int] = 0x1022  # design capacity ×0.1 Ah (1000 = 100.0 Ah)
+    _REG_CHG_VLIM:   Final[int] = 0x1023  # charge voltage limit ×0.01 V (1410 = 14.10 V)
+    _REG_SN:         Final[int] = 0x2000  # serial number (8 regs, 16 ASCII chars)
 
-    # Contiguous block 0x1016-0x101E = 9 registers
+    # Contiguous main block: 0x1016–0x101E = 9 registers
     _BLOCK_START: Final[int] = _REG_VOLTAGE
-    _BLOCK_COUNT: Final[int] = _REG_CYCLES - _REG_VOLTAGE + 1  # 9
+    _BLOCK_COUNT: Final[int] = _REG_POWER - _REG_VOLTAGE + 1  # 9
 
-    # Fallback capacity when model cannot be determined from name/serial
-    _DEFAULT_CAPACITY_AH: Final[float] = 100.0
+    # Fields decoded from the contiguous block via _decode_data().
+    # pos is relative to the first data byte of the Modbus response payload.
+    # Offset within block: (register - _REG_VOLTAGE) × 2 bytes.
+    _FIELDS: Final[tuple[BMSDp, ...]] = (
+        BMSDp("voltage",        (0x1016 - _REG_VOLTAGE) * 2, 2, False, lambda x: x * 0.01),
+        BMSDp("current",        (0x1017 - _REG_VOLTAGE) * 2, 2, True,  lambda x: x * 0.1),
+        BMSDp("battery_level",  (0x101C - _REG_VOLTAGE) * 2, 2, False),
+        BMSDp("battery_health", (0x101D - _REG_VOLTAGE) * 2, 2, False),
+        BMSDp("power",          (0x101E - _REG_VOLTAGE) * 2, 2, False, float),
+    )
 
-    # Lookup table: voltage (V) -> number of LFP cells in series
-    # All Pylontech RT batteries use 3.2V nominal LFP cells
+    # Lookup: nominal voltage → number of LFP cells in series
     _VOLTAGE_TO_CELLS: Final[dict[int, int]] = {
-        12: 4,   # 12V  = 4S
-        24: 8,   # 24V  = 8S
-        36: 12,  # 36V  = 12S
-        48: 16,  # 48V  = 16S
+        12: 4,
+        24: 8,
+        36: 12,
+        48: 16,
     }
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _parse_model(name: str) -> tuple[int, int, int]:
-        """Extract (voltage, capacity_ah, cell_count) from device name or serial number.
+        """Extract (voltage_v, capacity_ah, cell_count) from BLE device name.
 
-        Device name format:  "RT{voltage}{capacity}-{serial}"
-          e.g. "RT12100-710003" -> voltage=12, capacity=100, cells=4
-               "RT24100-000001" -> voltage=24, capacity=100, cells=8
-
-        Serial number prefix: first character encodes generation/family but
-        not the model — use device name as primary source.
-
-        Returns a tuple of (voltage_v, capacity_ah, cell_count).
-        Falls back to (12, 100, 4) if parsing fails.
+        Name format: "RT{vv}{ccc}[-suffix]", e.g. "RT12100-710003".
+        Falls back to (12, 100, 4) for unknown names.
         """
-        # Match "RT{vv}{ccc}" at the start, e.g. RT12100, RT24100, RT12200
         m = re.search(r"RT(\d{2})(\d+)", name or "")
         if m:
-            voltage_v    = int(m.group(1))
-            capacity_ah  = int(m.group(2))
-            cell_count   = BMS._VOLTAGE_TO_CELLS.get(voltage_v, 4)
+            voltage_v   = int(m.group(1))
+            capacity_ah = int(m.group(2))
+            cell_count  = BMS._VOLTAGE_TO_CELLS.get(voltage_v, 4)
             return voltage_v, capacity_ah, cell_count
-        return 12, 100, 4  # safe fallback for RT12100
+        return 12, 100, 4
+
+    @staticmethod
+    @cache
+    def _cmd(register: int, count: int) -> bytes:
+        """Build a Modbus RTU read holding registers (FC=0x03) request."""
+        frame = bytes([BMS._MB_ADDR, 0x03]) + register.to_bytes(2, "big") + count.to_bytes(2, "big")
+        return frame + crc_modbus(frame).to_bytes(2, "little")
+
+    @staticmethod
+    def _parse_regs(data: bytes, count: int) -> list[int] | None:
+        """Parse a Modbus RTU response; return list of uint16 or None on error."""
+        expected = 3 + count * 2 + 2
+        if len(data) < expected:
+            return None
+        if data[1] & 0x80:
+            return None
+        if data[1] != 0x03 or data[2] != count * 2:
+            return None
+        if crc_modbus(data[:-2]) != int.from_bytes(data[-2:], "little"):
+            return None
+        return [
+            int.from_bytes(data[3 + i * 2: 5 + i * 2], "big")
+            for i in range(count)
+        ]
+
+    # ------------------------------------------------------------------
+    # BaseBMS static interface
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def matcher_dict_list() -> list[MatcherPattern]:
+        """Return Bluetooth advertisement matchers.
+
+        The BLE module (Telink TLSR8266) advertises under two possible local names:
+          - "RT12100-XXXXXX" (or RT24100 etc.) – set by Pylontech firmware
+          - "GModule"                           – Telink default fallback name
+
+        The device always advertises the vendor-specific service UUID
+        00010203-0405-0607-0809-0a0b0c0d1910 regardless of its local name, so we
+        include service_uuid in every matcher.  This makes discovery robust against
+        stale name caches in the HA Bluetooth stack (e.g. after a bluetoothctl remove
+        the host may still know the device under its old "GModule" name until restart).
+        """
+        _SVC = BMS.uuid_services()[0]
+        return [
+            {"local_name": "RT[0-9]*", "service_uuid": _SVC, "connectable": True},
+            {"local_name": "GModule",  "service_uuid": _SVC, "connectable": True},
+        ]
+
+    @staticmethod
+    def uuid_services() -> tuple[str, ...]:
+        """Return required BLE service UUIDs."""
+        return ("00010203-0405-0607-0809-0a0b0c0d1910",)
+
+    @staticmethod
+    def uuid_rx() -> str:
+        """Return UUID of the notify characteristic (Module → Phone)."""
+        return "00010203-0405-0607-0809-0a0b0c0d2b10"
+
+    @staticmethod
+    def uuid_tx() -> str:
+        """Return UUID of the write characteristic (Phone → Module)."""
+        return "00010203-0405-0607-0809-0a0b0c0d2b11"
+
+    # ------------------------------------------------------------------
+    # Initialisation
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -109,94 +198,17 @@ class BMS(BaseBMS):
         """Initialize BMS members."""
         super().__init__(ble_device, keep_alive, secret, logger_name)
         self._msg: bytes = b""
-        self._exp_len: int = 0  # expected response length in bytes
+        self._exp_len: int = 0
 
-        # Derive capacity and cell count from the BLE device name when available.
-        # The name "RT12100-XXXXXX" encodes voltage and capacity directly.
-        # Falls back to defaults when name is "GModule" (Telink default).
         _dev_name: str = ble_device.name or ""
         _, self._capacity_ah, self._cell_count = BMS._parse_model(_dev_name)
         self._log.debug(
-            "model parsed from name '%s': capacity=%dAh cells=%d",
+            "model parsed from '%s': capacity=%d Ah, cells=%d",
             _dev_name, self._capacity_ah, self._cell_count,
         )
 
     # ------------------------------------------------------------------
-    # Static interface required by BaseBMS
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def matcher_dict_list() -> list[MatcherPattern]:
-        """Return Bluetooth advertisement matchers.
-
-        The BLE module (Telink TLSR8266) advertises under two possible local names:
-          - "RT12100-XXXXXX" when Pylontech firmware sets the device name
-          - "GModule"        when the module falls back to its Telink default name
-
-        The advertised service UUIDs differ depending on pairing state:
-          - Unpaired: standard BT profiles (HID 0x1812, Battery 0x180F)
-          - Paired/connected: proprietary Telink SPP service (0x..1910)
-        Therefore service_uuid is not used as a matcher criterion.
-        """
-        return [
-            {
-                "local_name": "RT[0-9]*",
-                "connectable": True,
-            },
-            {
-                "local_name": "GModule",
-                "connectable": True,
-            },
-        ]
-
-    @staticmethod
-    def uuid_services() -> tuple[str, ...]:
-        """Return required BLE service UUIDs."""
-        return ("00010203-0405-0607-0809-0a0b0c0d1910",)
-
-    @staticmethod
-    def uuid_rx() -> str:
-        """Return UUID of the notify characteristic (Module -> Phone)."""
-        return "00010203-0405-0607-0809-0a0b0c0d2b10"
-
-    @staticmethod
-    def uuid_tx() -> str:
-        """Return UUID of the write characteristic (Phone -> Module)."""
-        return "00010203-0405-0607-0809-0a0b0c0d2b11"
-
-    # ------------------------------------------------------------------
-    # Modbus helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    @cache
-    def _cmd(register: int, count: int) -> bytes:
-        """Build a Modbus RTU read holding registers (FC=0x03) request."""
-        frame = bytes([BMS._MB_ADDR, 0x03]) + register.to_bytes(2, "big") + count.to_bytes(2, "big")
-        return frame + crc_modbus(frame).to_bytes(2, "little")
-
-    @staticmethod
-    def _parse_regs(data: bytes, count: int) -> list[int] | None:
-        """Parse a Modbus RTU response, return list of uint16 or None on error.
-
-        Validates: function code, byte count, and CRC.
-        """
-        expected = 3 + count * 2 + 2
-        if len(data) < expected:
-            return None
-        if data[1] & 0x80:  # exception response
-            return None
-        if data[1] != 0x03 or data[2] != count * 2:
-            return None
-        if crc_modbus(data[:-2]) != int.from_bytes(data[-2:], "little"):
-            return None
-        return [
-            int.from_bytes(data[3 + i * 2 : 5 + i * 2], "big")
-            for i in range(count)
-        ]
-
-    # ------------------------------------------------------------------
-    # Notification handler (called by BaseBMS on RX characteristic)
+    # Notification handler
     # ------------------------------------------------------------------
 
     def _notification_handler(
@@ -204,22 +216,20 @@ class BMS(BaseBMS):
         _sender: BleakGATTCharacteristic,
         data: bytearray,
     ) -> None:
-        """Accumulate BLE fragments and signal when a complete frame arrives."""
-        self._log.debug("RX BLE data (%dB): %s", len(data), data.hex(" "))
+        """Accumulate BLE fragments; signal when a complete Modbus frame arrives."""
+        self._log.debug("RX BLE (%dB): %s", len(data), data.hex(" "))
         self._frame.extend(data)
 
-        # A valid Modbus response starts with our device address
         if not self._frame or self._frame[0] != BMS._MB_ADDR:
-            self._log.debug("unexpected SOF, discarding frame")
+            self._log.debug("unexpected SOF – discarding")
             self._frame.clear()
             return
 
-        # Determine expected length once we have at least 3 bytes
         if len(self._frame) >= 3:
             if self._frame[1] & 0x80:
-                self._exp_len = 5  # exception response: addr + FC + code + CRC(2)
+                self._exp_len = 5
             else:
-                self._exp_len = 3 + self._frame[2] + 2  # normal response
+                self._exp_len = 3 + self._frame[2] + 2
 
         if self._exp_len and len(self._frame) >= self._exp_len:
             self._msg = bytes(self._frame[: self._exp_len])
@@ -228,14 +238,13 @@ class BMS(BaseBMS):
             self._msg_event.set()
 
     # ------------------------------------------------------------------
-    # Device info (override to read serial number from BMS registers)
+    # Device info (optional serial number readout)
     # ------------------------------------------------------------------
 
     async def _fetch_device_info(self) -> BMSInfo:
-        """Read device info: standard BT service + serial number from BMS registers."""
+        """Read standard BT device info plus serial number from Modbus registers."""
         info = await super()._fetch_device_info()
 
-        # Read serial number from Modbus registers 0x2000-0x2007 (8 regs, 16 ASCII chars)
         await self._await_msg(BMS._cmd(BMS._REG_SN, 8))
         regs = self._parse_regs(self._msg, 8)
         if regs:
@@ -256,48 +265,64 @@ class BMS(BaseBMS):
 
     async def _async_update(self) -> BMSSample:
         """Read current BMS state and return a BMSSample."""
-        # Read the contiguous main block (9 registers: 0x1016-0x101E)
         await self._await_msg(BMS._cmd(BMS._BLOCK_START, BMS._BLOCK_COUNT))
-        regs = self._parse_regs(self._msg, BMS._BLOCK_COUNT)
-        if not regs:
-            raise TimeoutError("Failed to read BMS data block")
+        raw = self._parse_regs(self._msg, BMS._BLOCK_COUNT)
+        if not raw:
+            raise TimeoutError("failed to read BMS data block")
 
-        def g(reg: int) -> int:
-            return regs[reg - BMS._BLOCK_START]
+        # Build the raw byte payload that _decode_data expects (strip addr+FC+bytecount)
+        data = self._msg[3: 3 + BMS._BLOCK_COUNT * 2]
+        result: BMSSample = BMS._decode_data(BMS._FIELDS, data)
 
-        voltage    = g(BMS._REG_VOLTAGE) * 0.01
-        current    = (g(BMS._REG_CURRENT) if g(BMS._REG_CURRENT) < 0x8000 else g(BMS._REG_CURRENT) - 0x10000) * 0.1
-        cell_v_max = round(g(BMS._REG_CELL_MAX) * 0.001, 3)
-        cell_v_min = round(g(BMS._REG_CELL_MIN) * 0.001, 3)
-        temp_max   = (g(BMS._REG_TEMP_MAX) if g(BMS._REG_TEMP_MAX) < 0x8000 else g(BMS._REG_TEMP_MAX) - 0x10000) * 0.1
-        temp_min   = (g(BMS._REG_TEMP_MIN) if g(BMS._REG_TEMP_MIN) < 0x8000 else g(BMS._REG_TEMP_MIN) - 0x10000) * 0.1
-        soc        = g(BMS._REG_SOC)
-        soh        = g(BMS._REG_SOH)
-        cycles     = g(BMS._REG_CYCLES)
+        # Helper: get raw uint16 value for a given register address
+        def reg(r: int) -> int:
+            return raw[r - BMS._REG_VOLTAGE]
 
-        result: BMSSample = {
-            "voltage":        round(voltage, 2),
-            "current":        round(current, 2),
-            "battery_level":  soc,
-            "battery_health":  soh,
-            "temp_values":    [round(temp_max, 1), round(temp_min, 1)],
-            "cell_voltages":  [cell_v_max, cell_v_min],
-            "cycles":         cycles,
-            # cycle_charge [Ah] lets BaseBMS calculate cycle_capacity [Wh] automatically
-            "cycle_charge":   round(self._capacity_ah * soc / 100.0, 1),
-        }
+        # ---- cell voltages: [max, min] ----
+        # Only min/max aggregates are available via Modbus (0x1018, 0x1019).
+        # Exposed as a two-element list so BaseBMS can compute delta_voltage.
+        result["cell_voltages"] = [
+            round(reg(BMS._REG_CELL_MAX) * 0.001, 3),
+            round(reg(BMS._REG_CELL_MIN) * 0.001, 3),
+        ]
 
-        # Lifetime accumulated energy (separate register, outside main block)
-        # Scale: x0.1 kWh — informational only, logged but not in BMSSample
-        # (BMSSample.total_charge expects Ah, not kWh)
-        try:
-            await self._await_msg(BMS._cmd(BMS._REG_ENERGY, 1))
-            e_regs = self._parse_regs(self._msg, 1)
-            if e_regs:
-                self._log.debug(
-                    "lifetime energy: %.1f kWh", e_regs[0] * 0.1
-                )
-        except TimeoutError:
-            self._log.debug("Energy register not available, skipping")
+        # ---- temperatures: [max, min] ----
+        def _signed(v: int) -> int:
+            return v if v < 0x8000 else v - 0x10000
+
+        result["temp_values"] = [
+            round(_signed(reg(BMS._REG_TEMP_MAX)) * 0.1, 1),
+            round(_signed(reg(BMS._REG_TEMP_MIN)) * 0.1, 1),
+        ]
+
+        # ---- cycle_charge [Ah]: BaseBMS uses this to compute cycle_capacity [Wh] ----
+        result["cycle_charge"] = round(
+            self._capacity_ah * result.get("battery_level", 0) / 100.0, 1
+        )
+
+        # ---- design_capacity and lifetime energy: separate reads ----
+        # 0x1022: design capacity ×0.1 Ah (e.g. 1000 → 100.0 Ah for RT12100)
+        await self._await_msg(BMS._cmd(BMS._REG_DESIGN_CAP, 1))
+        dcap = self._parse_regs(self._msg, 1)
+        if dcap:
+            result["design_capacity"] = round(dcap[0] * 0.1)
+            # Update internal capacity so cycle_charge reflects BMS-reported value
+            self._capacity_ah = dcap[0] * 0.1
+            result["cycle_charge"] = round(
+                self._capacity_ah * result.get("battery_level", 0) / 100.0, 1
+            )
+
+        # 0x1020: lifetime accumulated energy ×0.1 kWh – informational log only
+        await self._await_msg(BMS._cmd(BMS._REG_ENERGY, 1))
+        energy = self._parse_regs(self._msg, 1)
+        if energy:
+            self._log.debug("lifetime energy: %.1f kWh", energy[0] * 0.1)
+
+        # 0x1021: BMS dynamic allowed current ×0.1 A – informational log only
+        # Observed: 300 (30.0 A) when charging, 100 (10.0 A) when discharging
+        await self._await_msg(BMS._cmd(0x1021, 1))
+        alim = self._parse_regs(self._msg, 1)
+        if alim:
+            self._log.debug("allowed current: %.1f A", alim[0] * 0.1)
 
         return result
