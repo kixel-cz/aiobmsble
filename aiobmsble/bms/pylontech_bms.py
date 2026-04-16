@@ -98,12 +98,14 @@ class BMS(BaseBMS):
           - "RT12100-XXXXXX" (or RT24100 etc.) - set by Pylontech firmware
           - "GModule"                           - Telink default fallback name
 
-        Note: the service UUID is not included in advertisement packets, so
-        matching relies on local_name only.
+        The vendor-specific service UUID is included in advertisement packets and
+        is combined with the local name for more reliable discovery — in particular
+        when the host Bluetooth stack has cached a stale device name.
         """
+        _SVC = BMS.uuid_services()[0]
         return [
-            {"local_name": "RT[0-9]*", "connectable": True},
-            {"local_name": "GModule",  "connectable": True},
+            {"local_name": "RT[0-9]*", "service_uuid": _SVC, "connectable": True},
+            {"local_name": "GModule",  "service_uuid": _SVC, "connectable": True},
         ]
 
     @staticmethod
@@ -134,6 +136,8 @@ class BMS(BaseBMS):
     ) -> None:
         """Initialize BMS members."""
         super().__init__(ble_device, keep_alive, secret, logger_name)
+        self._msg: bytes = b""
+        self._exp_len: int = 0
         self._capacity_ah, self._cell_count = BMS._parse_model(self.name)
         self._log.debug(
             "model parsed from '%s': capacity=%d Ah, cells=%d",
@@ -177,8 +181,11 @@ class BMS(BaseBMS):
         """Read standard BT device info plus serial number from Modbus registers."""
         info = await super()._fetch_device_info()
 
-        await self._await_msg(BMS._cmd(BMS._REG_SN, 8))
-        regs = self._parse_regs(self._msg, 8)
+        try:
+            await self._await_msg(BMS._cmd(BMS._REG_SN, 8))
+            regs = self._parse_regs(self._msg, 8)
+        except TimeoutError:
+            regs = None
         if regs:
             sn = "".join(
                 chr(b)
