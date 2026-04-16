@@ -87,11 +87,11 @@ class BMS(BaseBMS):
     # pos is relative to the first data byte of the Modbus response payload.
     # Offset within block: (register - _REG_VOLTAGE) × 2 bytes.
     _FIELDS: Final[tuple[BMSDp, ...]] = (
-        BMSDp("voltage",        (0x1016 - _REG_VOLTAGE) * 2, 2, False, lambda x: x * 0.01),
-        BMSDp("current",        (0x1017 - _REG_VOLTAGE) * 2, 2, True,  lambda x: x * 0.1),
-        BMSDp("battery_level",  (0x101C - _REG_VOLTAGE) * 2, 2, False),
-        BMSDp("battery_health", (0x101D - _REG_VOLTAGE) * 2, 2, False),
-        BMSDp("power",          (0x101E - _REG_VOLTAGE) * 2, 2, False, float),
+        BMSDp("voltage", 0, 2, False, lambda x: x * 0.01),
+        BMSDp("current", 2, 2, True,  lambda x: x * 0.1),
+        BMSDp("battery_level", 12, 2, False),
+        BMSDp("battery_health", 14, 2, False),
+        BMSDp("power", 16, 2, False, float),
     )
 
     # Lookup: nominal voltage → number of LFP cells in series
