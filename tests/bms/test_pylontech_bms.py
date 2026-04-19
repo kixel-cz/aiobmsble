@@ -8,6 +8,7 @@ import pytest
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
 from aiobmsble import BMSSample
+from bleak.uuids import normalize_uuid_str
 from aiobmsble.basebms import crc_modbus
 from aiobmsble.bms.pylontech_bms import BMS
 from aiobmsble.test_data import adv_dict_to_advdata
@@ -266,14 +267,26 @@ async def test_invalid_response(
 # _parse_regs unit tests
 # ---------------------------------------------------------------------------
 
-def test_parse_regs_exception_response() -> None:
-    assert BMS._parse_regs(bytes(_mb_exception(0x02)), 1) is None
+def test_exception_response_discarded(patch_bleak_client, monkeypatch) -> None:
+    """Test that Modbus exception responses are discarded by the notification handler."""
+    monkeypatch.setattr(
+        MockPylontechBleakClient, "RESP",
+        MockPylontechBleakClient.RESP | {_REQ_MAIN: _mb_exception(0x02)},
+    )
+    patch_bleak_client(MockPylontechBleakClient)
+    bms = BMS(generate_ble_device())
+    bms._notification_handler(None, bytearray(_mb_exception(0x02)))  # type: ignore[arg-type]
+    assert not bms._msg_event.is_set()
 
 
-def test_parse_regs_wrong_fc() -> None:
+def test_wrong_fc_discarded(patch_bleak_client) -> None:
+    """Test that frames with wrong function code are discarded."""
+    patch_bleak_client(MockPylontechBleakClient)
+    bms = BMS(generate_ble_device())
     data = bytearray([0x01, 0x04, 0x02, 0x00, 0x01])
     data.extend(crc_modbus(bytes(data)).to_bytes(2, "little"))
-    assert BMS._parse_regs(bytes(data), 1) is None
+    bms._notification_handler(None, data)  # type: ignore[arg-type]
+    assert not bms._msg_event.is_set()
 
 
 async def test_notification_handler_bad_sof(patch_bleak_client) -> None:
@@ -351,11 +364,13 @@ def test_matcher_covers_rt_variants(
     local_name: str, has_service_uuid: bool, should_match: bool
 ) -> None:
     # Real devices advertise both local_name and the vendor service UUID
+    # RT devices advertise Battery Service (0x180F); GModule advertises vendor UUID
     adv_dict: dict = {}
     if local_name:
         adv_dict["local_name"] = local_name
     if has_service_uuid:
-        adv_dict["service_uuids"] = [BMS.uuid_services()[0]]
+        svc = normalize_uuid_str("180f") if local_name and local_name.startswith("RT") else BMS.uuid_services()[0]
+        adv_dict["service_uuids"] = [svc]
     adv = adv_dict_to_advdata(adv_dict)
     matched = any(_advertisement_matches(m, adv, "") for m in BMS.matcher_dict_list())
     assert matched is should_match
