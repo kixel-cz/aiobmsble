@@ -11,6 +11,7 @@ from typing import Final
 
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
+from bleak.uuids import normalize_uuid_str
 
 from aiobmsble import BMSDp, BMSInfo, BMSSample, MatcherPattern
 from aiobmsble.basebms import BaseBMS, crc_modbus
@@ -26,7 +27,7 @@ class BMS(BaseBMS):
 
     _MB_ADDR: Final[int] = 1
 
-    # Register addresses kept only where referenced outside _FIELDS
+    # Register addresses used outside _FIELDS
     _REG_CELL_MAX: Final[int] = 0x1018
     _REG_CELL_MIN: Final[int] = 0x1019
     _REG_TEMP_MAX: Final[int] = 0x101A
@@ -75,17 +76,6 @@ class BMS(BaseBMS):
         frame = bytes([BMS._MB_ADDR, 0x03]) + register.to_bytes(2, "big") + count.to_bytes(2, "big")
         return frame + crc_modbus(frame).to_bytes(2, "little")
 
-    @staticmethod
-    def _parse_regs(data: bytes, count: int) -> list[int] | None:
-        """Parse a Modbus RTU response; return list of uint16 or None on error."""
-        if len(data) < 3 + count * 2 + 2:
-            return None
-        if data[1] & 0x80 or data[1] != 0x03 or data[2] != count * 2:
-            return None
-        if crc_modbus(data[:-2]) != int.from_bytes(data[-2:], "little"):
-            return None
-        return [int.from_bytes(data[3 + i * 2: 5 + i * 2], "big") for i in range(count)]
-
     # ------------------------------------------------------------------
     # BaseBMS static interface
     # ------------------------------------------------------------------
@@ -95,17 +85,14 @@ class BMS(BaseBMS):
         """Return Bluetooth advertisement matchers.
 
         The BLE module (Telink TLSR8266) advertises under two possible local names:
-          - "RT12100-XXXXXX" (or RT24100 etc.) - set by Pylontech firmware
-          - "GModule"                           - Telink default fallback name
-
-        The vendor-specific service UUID is included in advertisement packets and
-        is combined with the local name for more reliable discovery — in particular
-        when the host Bluetooth stack has cached a stale device name.
+          - "RT12100-XXXXXX" (or RT24100 etc.) - set by Pylontech firmware,
+            advertises the standard Battery Service UUID (0x180F)
+          - "GModule"                           - Telink default fallback name,
+            advertises the vendor-specific service UUID
         """
-        _SVC = BMS.uuid_services()[0]
         return [
-            {"local_name": "RT[0-9]*", "service_uuid": _SVC, "connectable": True},
-            {"local_name": "GModule",  "service_uuid": _SVC, "connectable": True},
+            {"local_name": "RT[0-9]*", "service_uuid": normalize_uuid_str("180f"), "connectable": True},
+            {"local_name": "GModule",  "service_uuid": BMS.uuid_services()[0],     "connectable": True},
         ]
 
     @staticmethod
@@ -153,7 +140,7 @@ class BMS(BaseBMS):
         _sender: BleakGATTCharacteristic,
         data: bytearray,
     ) -> None:
-        """Accumulate BLE fragments; signal when a complete Modbus frame arrives."""
+        """Accumulate BLE fragments; signal when a complete and valid Modbus frame arrives."""
         self._log.debug("RX BLE (%dB): %s", len(data), data.hex(" "))
         self._frame.extend(data)
 
@@ -167,11 +154,25 @@ class BMS(BaseBMS):
                 5 if self._frame[1] & 0x80 else 3 + self._frame[2] + 2
             )
 
-        if self._exp_len and len(self._frame) >= self._exp_len:
-            self._msg = bytes(self._frame[: self._exp_len])
-            self._frame.clear()
-            self._exp_len = 0
-            self._msg_event.set()
+        if not self._exp_len or len(self._frame) < self._exp_len:
+            return
+
+        exp_len = self._exp_len
+        frame = bytes(self._frame[: exp_len])
+        self._frame.clear()
+        self._exp_len = 0
+
+        # Validate: function code, byte count, CRC
+        if frame[1] & 0x80:
+            self._log.debug("Modbus exception response: 0x%02X", frame[2])
+            return
+        data_bytes = frame[2]
+        if frame[1] != 0x03 or data_bytes != exp_len - 5 or crc_modbus(frame[:-2]) != int.from_bytes(frame[-2:], "little"):
+            self._log.debug("invalid frame (bad FC, bytecount or CRC) - discarding")
+            return
+
+        self._msg = frame
+        self._msg_event.set()
 
     # ------------------------------------------------------------------
     # Device info
@@ -183,18 +184,16 @@ class BMS(BaseBMS):
 
         try:
             await self._await_msg(BMS._cmd(BMS._REG_SN, 8))
-            regs = self._parse_regs(self._msg, 8)
         except TimeoutError:
-            regs = None
-        if regs:
-            sn = "".join(
-                chr(b)
-                for r in regs
-                for b in [(r >> 8) & 0xFF, r & 0xFF]
-                if 32 <= b < 127
-            ).strip()
-            if sn:
-                info["serial_number"] = sn
+            return info
+        sn = "".join(
+            chr(b)
+            for r in [int.from_bytes(self._msg[3 + i * 2: 5 + i * 2], "big") for i in range(8)]
+            for b in [(r >> 8) & 0xFF, r & 0xFF]
+            if 32 <= b < 127
+        ).strip()
+        if sn:
+            info["serial_number"] = sn
 
         return info
 
@@ -205,9 +204,10 @@ class BMS(BaseBMS):
     async def _async_update(self) -> BMSSample:
         """Read current BMS state and return a BMSSample."""
         await self._await_msg(BMS._cmd(BMS._BLOCK_START, BMS._BLOCK_COUNT))
-        raw = self._parse_regs(self._msg, BMS._BLOCK_COUNT)
-        if not raw:
-            raise TimeoutError("failed to read BMS data block")
+        raw = [
+            int.from_bytes(self._msg[3 + i * 2: 5 + i * 2], "big")
+            for i in range(BMS._BLOCK_COUNT)
+        ]
 
         data = self._msg[3: 3 + BMS._BLOCK_COUNT * 2]
         result: BMSSample = BMS._decode_data(BMS._FIELDS, data)
