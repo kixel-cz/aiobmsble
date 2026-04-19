@@ -231,14 +231,7 @@ class BMS(BaseBMS):
             round(_signed(reg(BMS._REG_TEMP_MIN)) * 0.1, 1),
         ]
 
-        # ---- cycle_charge [Ah] -> BaseBMS computes cycle_capacity [Wh] ----
-        # Use BMS-reported design_capacity if available, else fall back to
-        # value parsed from device name in __init__.
-        if dcap := result.get("design_capacity"):
-            self._capacity_ah = float(dcap)
-        result["cycle_charge"] = round(
-            self._capacity_ah * result.get("battery_level", 0) / 100.0, 1
-        )
+        result.setdefault("design_capacity", self._capacity_ah)
 
         # ---- informational logs ----
         # 0x1020: lifetime accumulated energy x0.1 kWh
