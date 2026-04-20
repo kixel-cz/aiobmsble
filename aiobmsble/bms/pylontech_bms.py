@@ -41,7 +41,7 @@ class BMS(BaseBMS):
     # Byte offsets within the Modbus response payload: (register - 0x1016) * 2
     _FIELDS: Final[tuple[BMSDp, ...]] = (
         BMSDp("voltage",          0, 2, False, lambda x: x * 0.01),
-        BMSDp("current",          2, 2, True,  lambda x: x * 0.1),
+        BMSDp("current",          2, 2, True,  lambda x: round(x * 0.1, 2)),
         BMSDp("battery_level",   12, 2, False),
         BMSDp("battery_health",  14, 2, False),
         BMSDp("power",           16, 2, False, float),
@@ -50,6 +50,9 @@ class BMS(BaseBMS):
 
     # Lookup: nominal voltage -> LFP cells in series
     _VOLTAGE_TO_CELLS: Final[dict[int, int]] = {12: 4, 24: 8, 36: 12, 48: 16}
+
+    # Nominal LFP cell voltage used to convert lifetime energy (kWh) -> total charge (Ah)
+    _LFP_CELL_VOLTAGE: Final[float] = 3.2
 
     # ------------------------------------------------------------------
     # Helpers
@@ -85,14 +88,19 @@ class BMS(BaseBMS):
         """Return Bluetooth advertisement matchers.
 
         The BLE module (Telink TLSR8266) advertises under two possible local names:
-          - "RT12100-XXXXXX" (or RT24100 etc.) - set by Pylontech firmware,
-            advertises the standard Battery Service UUID (0x180F)
-          - "GModule"                           - Telink default fallback name,
-            advertises the vendor-specific service UUID
+          - "RT12100-XXXXXX" (or RT24100 etc.) - set by Pylontech firmware
+          - "GModule" / "GMod"                 - Telink default fallback name
+            (may be truncated in BLE advertisement packets)
+
+        Both advertise Battery Service UUID (0x180F) and HID UUID (0x1812).
+        The vendor-specific service UUID is only visible after GATT discovery,
+        not in advertisement packets.
         """
+        _SVC = normalize_uuid_str("180f")
         return [
-            {"local_name": "RT[0-9]*", "service_uuid": normalize_uuid_str("180f"), "connectable": True},
-            {"local_name": "GModule",  "service_uuid": BMS.uuid_services()[0],     "connectable": True},
+            {"local_name": "RT[0-9]*", "service_uuid": _SVC, "connectable": True},
+            {"local_name": "GModule",  "service_uuid": _SVC, "connectable": True},
+            {"local_name": "GMod",     "service_uuid": _SVC, "connectable": True},
         ]
 
     @staticmethod
@@ -126,9 +134,10 @@ class BMS(BaseBMS):
         self._msg: bytes = b""
         self._exp_len: int = 0
         self._capacity_ah, self._cell_count = BMS._parse_model(self.name)
+        self._nominal_voltage: float = self._cell_count * BMS._LFP_CELL_VOLTAGE
         self._log.debug(
-            "model parsed from '%s': capacity=%d Ah, cells=%d",
-            self.name, self._capacity_ah, self._cell_count,
+            "model parsed from '%s': capacity=%d Ah, cells=%d, nominal=%.1f V",
+            self.name, self._capacity_ah, self._cell_count, self._nominal_voltage,
         )
 
     # ------------------------------------------------------------------
@@ -231,12 +240,17 @@ class BMS(BaseBMS):
             round(_signed(reg(BMS._REG_TEMP_MIN)) * 0.1, 1),
         ]
 
-        result.setdefault("design_capacity", self._capacity_ah)
+        # ---- cycle_charge [Ah] -> BaseBMS computes cycle_capacity [Wh] ----
+        # Use BMS-reported design_capacity when non-zero, else fall back to name-parsed value.
+        if result.get("design_capacity", 0) == 0:
+            result["design_capacity"] = self._capacity_ah
+        result["cycle_charge"] = round(
+            float(result["design_capacity"]) * result.get("battery_level", 0) / 100.0, 1
+        )
 
-        # ---- informational logs ----
-        # 0x1020: lifetime accumulated energy x0.1 kWh
-        self._log.debug("lifetime energy: %.1f kWh", raw[0x1020 - BMS._BLOCK_START] * 0.1)
-        # 0x1021: BMS dynamic allowed current x0.1 A
-        self._log.debug("allowed current: %.1f A",  raw[0x1021 - BMS._BLOCK_START] * 0.1)
+        # ---- total_charge [Ah] from lifetime energy (0x1020 x0.1 kWh) ----
+        # Convert kWh -> Ah using nominal LFP voltage (cell_count x 3.2 V)
+        lifetime_kwh = raw[0x1020 - BMS._BLOCK_START] * 0.1
+        result["total_charge"] = int(lifetime_kwh * 1000 / self._nominal_voltage)
 
         return result
