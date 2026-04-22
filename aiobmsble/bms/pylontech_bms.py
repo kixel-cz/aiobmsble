@@ -239,14 +239,7 @@ class BMS(BaseBMS):
             round(_signed(reg(BMS._REG_TEMP_MAX)) * 0.1, 1),
             round(_signed(reg(BMS._REG_TEMP_MIN)) * 0.1, 1),
         ]
-
-        # ---- cycle_charge [Ah] -> BaseBMS computes cycle_capacity [Wh] ----
-        # Use BMS-reported design_capacity when non-zero, else fall back to name-parsed value.
-        if result.get("design_capacity", 0) == 0:
-            result["design_capacity"] = self._capacity_ah
-        result["cycle_charge"] = round(
-            float(result["design_capacity"]) * result.get("battery_level", 0) / 100.0, 1
-        )
+        result.setdefault("design_capacity", self._capacity_ah)
 
         # ---- total_charge [Ah] from lifetime energy (0x1020 x0.1 kWh) ----
         # Convert kWh -> Ah using nominal LFP voltage (cell_count x 3.2 V)
