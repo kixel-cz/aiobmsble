@@ -98,8 +98,8 @@ class BMS(BaseBMS):
         """
         _SVC = normalize_uuid_str("180f")
         return [
-            {"local_name": "RT[0-9]*", "service_uuid": _SVC, "connectable": True},
-            {"local_name": "GModule",  "service_uuid": _SVC, "connectable": True},
+            {"local_name": "RT[0-9]*", "service_uuid": normalize_uuid_str("180f"), "connectable": True},
+            {"local_name": "GModule",  "service_uuid": BMS.uuid_services()[0], "connectable": True},
             {"local_name": "GMod",     "service_uuid": _SVC, "connectable": True},
         ]
 
