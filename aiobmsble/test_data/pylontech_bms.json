@@ -7,11 +7,10 @@
         "0000180f-0000-1000-8000-00805f9b34fb"
       ],
       "rssi": -46,
-      "platform_data": ["A4:C1:38:19:F0:91"]
     },
     "type": "pylontech_bms",
     "_comments": [
-      "Pylontech RT12100G31 (S/N K220924000710003)",
+      "Pylontech RT12100G31",
       "Advertisement captured when device is unpaired (shows standard HID/Battery profiles)",
       "local_name pattern: RT[0-9]* matches RT12100, RT24100, RT48100 etc."
     ]
@@ -24,13 +23,26 @@
         "00010203-0405-0607-0809-0a0b0c0d1912"
       ],
       "rssi": -48,
-      "platform_data": ["A4:C1:38:19:F0:91"]
     },
     "type": "pylontech_bms",
     "_comments": [
-      "Pylontech RT12100G31 (S/N K220924000710003)",
-      "Advertisement captured when device is paired/bonded — Telink TLSR8266 module",
-      "reverts to its default firmware name 'GModule' and exposes proprietary SPP service UUIDs"
+      "Pylontech RT12100G31",
+      "Advertisement captured when device is paired/bonded"
+    ]
+  },
+  {
+    "advertisement": {
+      "local_name": "GMod",
+      "service_uuids": [
+        "00010203-0405-0607-0809-0a0b0c0d1910",
+        "00010203-0405-0607-0809-0a0b0c0d1912"
+      ],
+      "rssi": -48,
+    },
+    "type": "pylontech_bms",
+    "_comments": [
+      "Pylontech RT12100G31",
+      "Advertisement captured when device is paired/bonded"
     ]
   }
 ]

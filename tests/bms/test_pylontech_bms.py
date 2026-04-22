@@ -203,7 +203,7 @@ async def test_design_capacity_fallback(monkeypatch, patch_bleak_client) -> None
     patch_bleak_client(MockPylontechBleakClient)
     bms = BMS(generate_ble_device(name="RT12200-000001"))  # 200 Ah from name
     result = await bms.async_update()
-    assert int(result["design_capacity"]) == 200
+    assert result["design_capacity"] == 200
     assert result["cycle_charge"] == 182.0  # 200 * 91%
     await bms.disconnect()
 
@@ -373,12 +373,13 @@ def test_matcher_covers_rt_variants(
     local_name: str, has_service_uuid: bool, should_match: bool
 ) -> None:
     """Test that matcher_dict_list covers all RT voltage/capacity variants."""
-    # All devices advertise Battery Service UUID (0x180F) in advertisement packets
+    # RT devices advertise 0x180F; GModule/GMod advertise vendor UUID
     adv_dict: dict = {}
     if local_name:
         adv_dict["local_name"] = local_name
     if has_service_uuid:
-        adv_dict["service_uuids"] = [normalize_uuid_str("180f")]
+        svc = normalize_uuid_str("180f") if local_name.startswith("RT") else BMS.uuid_services()[0]
+        adv_dict["service_uuids"] = [svc]
     adv = adv_dict_to_advdata(adv_dict)
     matched = any(_advertisement_matches(m, adv, "") for m in BMS.matcher_dict_list())
     assert matched is should_match

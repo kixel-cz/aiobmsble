@@ -40,12 +40,11 @@ class BMS(BaseBMS):
 
     # Byte offsets within the Modbus response payload: (register - 0x1016) * 2
     _FIELDS: Final[tuple[BMSDp, ...]] = (
-        BMSDp("voltage",          0, 2, False, lambda x: x * 0.01),
-        BMSDp("current",          2, 2, True,  lambda x: round(x * 0.1, 2)),
-        BMSDp("battery_level",   12, 2, False),
-        BMSDp("battery_health",  14, 2, False),
-        BMSDp("power",           16, 2, False, float),
-        BMSDp("design_capacity", 24, 2, False, lambda x: round(x * 0.1)),
+        BMSDp("voltage",         0, 2, False, lambda x: x * 0.01),
+        BMSDp("current",         2, 2, True,  lambda x: round(x * 0.1, 2)),
+        BMSDp("battery_level",  12, 2, False),
+        BMSDp("battery_health", 14, 2, False),
+        BMSDp("power",          16, 2, False, float),
     )
 
     # Lookup: nominal voltage -> LFP cells in series
@@ -92,15 +91,13 @@ class BMS(BaseBMS):
           - "GModule" / "GMod"                 - Telink default fallback name
             (may be truncated in BLE advertisement packets)
 
-        Both advertise Battery Service UUID (0x180F) and HID UUID (0x1812).
-        The vendor-specific service UUID is only visible after GATT discovery,
-        not in advertisement packets.
+        RT devices advertise Battery Service UUID (0x180F) in advertisement packets.
+        GModule/GMod devices advertise the vendor-specific service UUID.
         """
-        _SVC = normalize_uuid_str("180f")
         return [
             {"local_name": "RT[0-9]*", "service_uuid": normalize_uuid_str("180f"), "connectable": True},
-            {"local_name": "GModule",  "service_uuid": BMS.uuid_services()[0], "connectable": True},
-            {"local_name": "GMod",     "service_uuid": _SVC, "connectable": True},
+            {"local_name": "GModule",  "service_uuid": BMS.uuid_services()[0],     "connectable": True},
+            {"local_name": "GMod",     "service_uuid": BMS.uuid_services()[0],     "connectable": True},
         ]
 
     @staticmethod
@@ -239,6 +236,12 @@ class BMS(BaseBMS):
             round(_signed(reg(BMS._REG_TEMP_MAX)) * 0.1, 1),
             round(_signed(reg(BMS._REG_TEMP_MIN)) * 0.1, 1),
         ]
+
+        # ---- design_capacity ----
+        # Read design_capacity from register 0x1022 (x0.1 Ah); fall back to name-parsed value.
+        dcap_raw = raw[0x1022 - BMS._BLOCK_START]
+        if dcap_raw:
+            self._capacity_ah = dcap_raw * 0.1
         result.setdefault("design_capacity", self._capacity_ah)
 
         # ---- total_charge [Ah] from lifetime energy (0x1020 x0.1 kWh) ----
