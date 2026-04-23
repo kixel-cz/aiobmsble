@@ -241,7 +241,7 @@ class BMS(BaseBMS):
         # Read design_capacity from register 0x1022 (x0.1 Ah); fall back to name-parsed value.
         dcap_raw = raw[0x1022 - BMS._BLOCK_START]
         if dcap_raw:
-            self._capacity_ah = dcap_raw * 0.1
+            self._capacity_ah = round(dcap_raw * 0.1)
         result.setdefault("design_capacity", self._capacity_ah)
 
         # ---- total_charge [Ah] from lifetime energy (0x1020 x0.1 kWh) ----
