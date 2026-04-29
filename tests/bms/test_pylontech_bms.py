@@ -97,10 +97,6 @@ def ref_value() -> BMSSample:
     }
 
 
-# ---------------------------------------------------------------------------
-# BMSBasicTests
-# ---------------------------------------------------------------------------
-
 class TestBasicBMS(BMSBasicTests):
     """Run the standard BMS interface tests for Pylontech RT series."""
 
