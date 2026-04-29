@@ -5,7 +5,6 @@ Project: aiobmsble, https://pypi.org/p/aiobmsble/
 See docs/pylontech_bms.md for protocol details and register map.
 """
 
-from functools import cache
 import re
 from typing import Final
 
@@ -27,12 +26,8 @@ class BMS(BaseBMS):
 
     _MB_ADDR: Final[int] = 1
 
-    # Register addresses used outside _FIELDS
-    _REG_CELL_MAX: Final[int] = 0x1018
-    _REG_CELL_MIN: Final[int] = 0x1019
-    _REG_TEMP_MAX: Final[int] = 0x101A
-    _REG_TEMP_MIN: Final[int] = 0x101B
     _REG_SN:       Final[int] = 0x2000
+    _SN_COUNT:     Final[int] = 8
 
     # Contiguous block 0x1016-0x1022 = 13 registers
     _BLOCK_START: Final[int] = 0x1016
@@ -40,11 +35,12 @@ class BMS(BaseBMS):
 
     # Byte offsets within the Modbus response payload: (register - 0x1016) * 2
     _FIELDS: Final[tuple[BMSDp, ...]] = (
-        BMSDp("voltage",         0, 2, False, lambda x: x * 0.01),
-        BMSDp("current",         2, 2, True,  lambda x: round(x * 0.1, 2)),
-        BMSDp("battery_level",  12, 2, False),
+        BMSDp("voltage", 0, 2, False, lambda x: x * 0.01),
+        BMSDp("current", 2, 2, True,  lambda x: round(x * 0.1, 2)),
+        BMSDp("battery_level", 12, 2, False),
         BMSDp("battery_health", 14, 2, False),
-        BMSDp("power",          16, 2, False, float),
+        BMSDp("power", 16, 2, False, float),
+        BMSDp("design_capacity", 24, 2, False, lambda x: round(x * 0.1)),
     )
 
     # Lookup: nominal voltage -> LFP cells in series
@@ -80,12 +76,11 @@ class BMS(BaseBMS):
         """Return Bluetooth advertisement matchers.
 
         The BLE module (Telink TLSR8266) advertises under two possible local names:
-          - "RT12100-XXXXXX" (or RT24100 etc.) - set by Pylontech firmware
+          - "RT12100-XXXXXX" (or RT24100 etc.) - set by Pylontech firmware,
+            advertises Battery Service UUID (0x180F)
           - "GModule" / "GMod"                 - Telink default fallback name
-            (may be truncated in BLE advertisement packets)
-
-        RT devices advertise Battery Service UUID (0x180F) in advertisement packets.
-        GModule/GMod devices advertise the vendor-specific service UUID.
+            (may be truncated in BLE advertisement packets),
+            advertises the vendor-specific service UUID
         """
         return [
             {"local_name": "RT[0-9]*", "service_uuid": normalize_uuid_str("180f"), "connectable": True},
@@ -182,7 +177,9 @@ class BMS(BaseBMS):
         info = await super()._fetch_device_info()
 
         try:
-            await self._await_msg(BMS._cmd(BMS._REG_SN, 8))
+            await self._await_msg(
+                BMS._cmd_modbus(dev_id=BMS._MB_ADDR, addr=BMS._REG_SN, count=BMS._SN_COUNT)
+            )
         except TimeoutError:
             return info
         sn = "".join(
@@ -203,27 +200,20 @@ class BMS(BaseBMS):
     async def _async_update(self) -> BMSSample:
         """Read current BMS state and return a BMSSample."""
         await self._await_msg(
-            BMS._cmd_modbus(dev_id=0x1, addr=BMS._BLOCK_START, count=BMS._BLOCK_COUNT)
+            BMS._cmd_modbus(dev_id=BMS._MB_ADDR, addr=BMS._BLOCK_START, count=BMS._BLOCK_COUNT)
         )
-        raw = [
-            int.from_bytes(self._msg[3 + i * 2: 5 + i * 2], "big")
-            for i in range(BMS._BLOCK_COUNT)
-        ]
 
         result: BMSSample = BMS._decode_data(BMS._FIELDS, self._msg, start=3)
+        # Modbus exposes only min/max cell aggregates (0x1018, 0x1019), not per-cell values.
         result["cell_voltages"] = BMS._cell_voltages(self._msg, cells=2, start=7)
         result["temp_values"] = BMS._temp_values(self._msg, values=2, start=11, divider=10)
 
-        # ---- design_capacity ----
-        # Read design_capacity from register 0x1022 (x0.1 Ah); fall back to name-parsed value.
-        dcap_raw = raw[0x1022 - BMS._BLOCK_START]
-        if dcap_raw:
-            self._capacity_ah = round(dcap_raw * 0.1)
-        result.setdefault("design_capacity", self._capacity_ah)
+        # design_capacity from _FIELDS (0x1022 x0.1 Ah); fall back to name-parsed value.
+        if not result.get("design_capacity"):
+            result["design_capacity"] = self._capacity_ah
 
-        # ---- total_charge [Ah] from lifetime energy (0x1020 x0.1 kWh) ----
-        # Convert kWh -> Ah using nominal LFP voltage (cell_count x 3.2 V)
-        lifetime_kwh = raw[0x1020 - BMS._BLOCK_START] * 0.1
+        # total_charge [Ah] from lifetime energy register (0x1020 x0.1 kWh)
+        lifetime_kwh = int.from_bytes(self._msg[23:25], "big") * 0.1
         result["total_charge"] = int(lifetime_kwh * 1000 / self._nominal_voltage)
 
         return result

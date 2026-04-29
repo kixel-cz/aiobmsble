@@ -132,10 +132,6 @@ class MockPylontechBleakClient(MockBleakClient):
             self._notify_callback("MockPylontechBleakClient", resp)
 
 
-# ---------------------------------------------------------------------------
-# Core update tests
-# ---------------------------------------------------------------------------
-
 async def test_update(patch_bleak_client, keep_alive_fixture: bool) -> None:
     """Test BMS data update returns correct values."""
     patch_bleak_client(MockPylontechBleakClient)
@@ -199,10 +195,6 @@ async def test_design_capacity_fallback(monkeypatch, patch_bleak_client) -> None
     await bms.disconnect()
 
 
-# ---------------------------------------------------------------------------
-# Invalid response tests
-# ---------------------------------------------------------------------------
-
 @pytest.fixture(
     name="wrong_response",
     params=[
@@ -256,10 +248,6 @@ async def test_device_info_sn_register_timeout(
     await bms.disconnect()
 
 
-# ---------------------------------------------------------------------------
-# Notification handler tests
-# ---------------------------------------------------------------------------
-
 async def test_notification_handler_incomplete_frame(patch_bleak_client) -> None:
     """Test that _notification_handler waits for more data when frame is incomplete."""
     patch_bleak_client(MockPylontechBleakClient)
@@ -297,10 +285,6 @@ async def test_notification_handler_bad_sof(patch_bleak_client) -> None:
     await bms.disconnect()
 
 
-# ---------------------------------------------------------------------------
-# Model name parsing tests
-# ---------------------------------------------------------------------------
-
 @pytest.mark.parametrize(
     ("name", "expected_capacity", "expected_cells"),
     [
@@ -337,10 +321,6 @@ async def test_capacity_from_device_name(patch_bleak_client) -> None:
     assert bms_gmod._capacity_ah == 100
     assert bms_gmod._cell_count  == 4
 
-
-# ---------------------------------------------------------------------------
-# Matcher pattern tests
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     ("local_name", "has_service_uuid", "should_match"),
