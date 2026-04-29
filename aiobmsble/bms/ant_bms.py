@@ -72,9 +72,8 @@ class BMS(BaseBMS):
         """Provide BluetoothMatcher definition."""
         return [
             {
-                "local_name": "ANT-BLE*",
+                "local_name": "ANT?BLE[23]*",
                 "service_uuid": BMS.uuid_services()[0],
-                "manufacturer_id": 0x2313,
                 "connectable": True,
             }
         ]
@@ -130,10 +129,10 @@ class BMS(BaseBMS):
             and len(self._frame) >= self._exp_len
             and len(data) >= BMS._MIN_LEN
         ):
-            self._frame = bytearray()
+            self._frame.clear()
             self._exp_len = data[5] + BMS._MIN_LEN
 
-        self._frame += data
+        self._frame.extend(data)
         self._log.debug(
             "RX BLE data (%s): %s", "start" if data == self._frame else "cnt.", data
         )
@@ -153,19 +152,16 @@ class BMS(BaseBMS):
             return
 
         if not self._frame.endswith(BMS._TAIL):
-            self._log.debug("invalid frame end")
+            self._log.debug("invalid EOF")
             return
 
-        if (crc := crc_modbus(self._frame[1 : self._exp_len - 4])) != int.from_bytes(
-            self._frame[self._exp_len - 4 : self._exp_len - 2], "little"
+        if not self._check_integrity(
+            self._frame,
+            crc_modbus,
+            slice(1, self._exp_len - 4),
+            slice(self._exp_len - 4, self._exp_len - 2),
+            "little",
         ):
-            self._log.debug(
-                "invalid checksum 0x%X != 0x%X",
-                int.from_bytes(
-                    self._frame[self._exp_len - 4 : self._exp_len - 2], "little"
-                ),
-                crc,
-            )
             return
 
         self._msg = bytes(self._frame)
