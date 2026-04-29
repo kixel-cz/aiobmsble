@@ -202,7 +202,9 @@ class BMS(BaseBMS):
 
     async def _async_update(self) -> BMSSample:
         """Read current BMS state and return a BMSSample."""
-        await self._await_msg(BMS._cmd(BMS._BLOCK_START, BMS._BLOCK_COUNT))
+        await self._await_msg(
+            BMS._cmd_modbus(dev_id=0x1, addr=BMS._BLOCK_START, count=BMS._BLOCK_COUNT)
+        )
         raw = [
             int.from_bytes(self._msg[3 + i * 2: 5 + i * 2], "big")
             for i in range(BMS._BLOCK_COUNT)
