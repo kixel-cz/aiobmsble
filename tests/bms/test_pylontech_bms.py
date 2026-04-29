@@ -106,11 +106,6 @@ class TestBasicBMS(BMSBasicTests):
 
     bms_class = BMS
 
-
-# ---------------------------------------------------------------------------
-# Mock BleakClient
-# ---------------------------------------------------------------------------
-
 class MockPylontechBleakClient(MockBleakClient):
     """Emulate a Pylontech RT series BleakClient."""
 
