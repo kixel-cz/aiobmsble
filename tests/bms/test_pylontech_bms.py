@@ -44,7 +44,7 @@ from tests.test_basebms import BMSBasicTests
 
 # Modbus request bytes (used as keys in mock response dict)
 _REQ_MAIN: Final[bytes] = b"\x01\x03\x10\x16\x00\x0d\x61\x0b"
-_REQ_SN:   Final[bytes] = b"\x01\x03 \x00\x00\x08O\xcc"
+_REQ_SN: Final[bytes] = b"'\x01\x03\x20\x00\x00\x08\x4f\xcc'
 
 # Recorded Modbus responses
 _RESP_MAIN: Final[bytearray] = bytearray(
