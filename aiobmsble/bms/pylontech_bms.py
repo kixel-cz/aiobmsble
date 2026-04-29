@@ -71,13 +71,6 @@ class BMS(BaseBMS):
             return capacity_ah, BMS._VOLTAGE_TO_CELLS.get(voltage_v, 4)
         return 100, 4
 
-    @staticmethod
-    @cache
-    def _cmd(register: int, count: int) -> bytes:
-        """Build a Modbus RTU FC=0x03 request."""
-        frame = bytes([BMS._MB_ADDR, 0x03]) + register.to_bytes(2, "big") + count.to_bytes(2, "big")
-        return frame + crc_modbus(frame).to_bytes(2, "little")
-
     # ------------------------------------------------------------------
     # BaseBMS static interface
     # ------------------------------------------------------------------
