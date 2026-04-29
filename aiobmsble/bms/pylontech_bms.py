@@ -215,27 +215,9 @@ class BMS(BaseBMS):
             for i in range(BMS._BLOCK_COUNT)
         ]
 
-        data = self._msg[3: 3 + BMS._BLOCK_COUNT * 2]
-        result: BMSSample = BMS._decode_data(BMS._FIELDS, data)
-
-        # ---- cell voltages: [max, min] ----
-        # Modbus exposes only min/max aggregates (0x1018, 0x1019), not per-cell values.
-        def reg(r: int) -> int:
-            return raw[r - BMS._BLOCK_START]
-
-        result["cell_voltages"] = [
-            round(reg(BMS._REG_CELL_MAX) * 0.001, 3),
-            round(reg(BMS._REG_CELL_MIN) * 0.001, 3),
-        ]
-
-        # ---- temperatures: [max, min] ----
-        def _signed(v: int) -> int:
-            return v if v < 0x8000 else v - 0x10000
-
-        result["temp_values"] = [
-            round(_signed(reg(BMS._REG_TEMP_MAX)) * 0.1, 1),
-            round(_signed(reg(BMS._REG_TEMP_MIN)) * 0.1, 1),
-        ]
+        result: BMSSample = BMS._decode_data(BMS._FIELDS, self._msg, start=3)
+        result["cell_voltages"] = BMS._cell_voltages(self._msg, cells=2, start=7)
+        result["temp_values"] = BMS._temp_values(self._msg, values=2, start=11, divider=10)
 
         # ---- design_capacity ----
         # Read design_capacity from register 0x1022 (x0.1 Ah); fall back to name-parsed value.
