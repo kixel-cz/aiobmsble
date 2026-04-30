@@ -138,15 +138,12 @@ class BMS(BaseBMS):
         self._log.debug("RX BLE (%dB): %s", len(data), data.hex(" "))
         self._frame.extend(data)
 
-        if not self._frame or self._frame[0] != BMS._DEV_ID:
-            self._log.debug("unexpected SOF - discarding")
+        if len(self._frame) >= 5 and self._frame.startswith(b"\x01\x03"):
+            self._exp_len = 3 + self._frame[2] + 2
+        else:
+            self._log.debug("unexpected SOF")
             self._frame.clear()
             return
-
-        if len(self._frame) >= 3:
-            self._exp_len = (
-                5 if self._frame[1] & 0x80 else 3 + self._frame[2] + 2
-            )
 
         if not self._exp_len or len(self._frame) < self._exp_len:
             return
