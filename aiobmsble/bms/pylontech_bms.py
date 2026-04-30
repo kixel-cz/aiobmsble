@@ -13,7 +13,7 @@ from bleak.backends.device import BLEDevice
 from bleak.uuids import normalize_uuid_str
 
 from aiobmsble import BMSDp, BMSInfo, BMSSample, MatcherPattern
-from aiobmsble.basebms import BaseBMS, crc_modbus
+from aiobmsble.basebms import BaseBMS, b2str, crc_modbus
 
 
 class BMS(BaseBMS):
@@ -24,7 +24,7 @@ class BMS(BaseBMS):
         "default_model": "RT series",
     }
 
-    _MB_ADDR: Final[int] = 1
+    _DEV_ID: Final[int] = 1
 
     _REG_SN:       Final[int] = 0x2000
     _SN_COUNT:     Final[int] = 8
@@ -138,7 +138,7 @@ class BMS(BaseBMS):
         self._log.debug("RX BLE (%dB): %s", len(data), data.hex(" "))
         self._frame.extend(data)
 
-        if not self._frame or self._frame[0] != BMS._MB_ADDR:
+        if not self._frame or self._frame[0] != BMS._DEV_ID:
             self._log.debug("unexpected SOF - discarding")
             self._frame.clear()
             return
@@ -179,7 +179,7 @@ class BMS(BaseBMS):
         try:
             await self._await_msg(
                 BMS._cmd_modbus(
-                    dev_id=BMS._MB_ADDR, addr=BMS._REG_SN, count=BMS._SN_COUNT
+                    dev_id=BMS._DEV_ID, addr=BMS._REG_SN, count=BMS._SN_COUNT
                 )
             )
             if sn := b2str(self._msg[3 : 3 + BMS._SN_COUNT * 2]):
@@ -196,7 +196,7 @@ class BMS(BaseBMS):
     async def _async_update(self) -> BMSSample:
         """Read current BMS state and return a BMSSample."""
         await self._await_msg(
-            BMS._cmd_modbus(dev_id=BMS._MB_ADDR, addr=BMS._BLOCK_START, count=BMS._BLOCK_COUNT)
+            BMS._cmd_modbus(dev_id=BMS._DEV_ID, addr=BMS._BLOCK_START, count=BMS._BLOCK_COUNT)
         )
 
         result: BMSSample = BMS._decode_data(BMS._FIELDS, self._msg, start=3)
