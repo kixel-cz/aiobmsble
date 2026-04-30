@@ -157,9 +157,17 @@ class BMS(BaseBMS):
         if frame[1] & 0x80:
             self._log.debug("Modbus exception response: 0x%02X", frame[2])
             return
-        data_bytes = frame[2]
-        if frame[1] != 0x03 or data_bytes != exp_len - 5 or crc_modbus(frame[:-2]) != int.from_bytes(frame[-2:], "little"):
-            self._log.debug("invalid frame (bad FC, bytecount or CRC) - discarding")
+        if not self._check_integrity(
+            frame,
+            crc_modbus,
+            slice(None, -2),
+            slice(-2, None),
+            "little",
+        ):
+            return
+
+        if frame[2] != exp_len - 5:
+            self._log.debug("invalid frame length")
             return
 
         self._msg = frame
