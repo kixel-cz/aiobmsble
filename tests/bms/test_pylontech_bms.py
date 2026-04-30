@@ -102,6 +102,7 @@ class TestBasicBMS(BMSBasicTests):
 
     bms_class = BMS
 
+
 class MockPylontechBleakClient(MockBleakClient):
     """Emulate a Pylontech RT series BleakClient."""
 
@@ -245,6 +246,18 @@ async def test_device_info_sn_register_timeout(
     bms = BMS(generate_ble_device())
     info = await bms.device_info()
     assert info is not None
+    await bms.disconnect()
+
+
+async def test_notification_handler_incomplete_frame(patch_bleak_client) -> None:
+    """Test that _notification_handler waits for more data when frame is incomplete."""
+    patch_bleak_client(MockPylontechBleakClient)
+    bms = BMS(generate_ble_device())
+    await bms._connect()
+    # Need at least 5 bytes with correct header before exp_len is set
+    bms._notification_handler(None, bytearray([0x01, 0x03, 0x1a, 0x05, 0x2c]))  # type: ignore[arg-type]
+    assert len(bms._frame) == 5
+    assert not bms._msg_event.is_set()
     await bms.disconnect()
 
 
