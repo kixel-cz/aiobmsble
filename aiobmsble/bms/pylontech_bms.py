@@ -43,9 +43,6 @@ class BMS(BaseBMS):
         BMSDp("design_capacity", 24, 2, False, lambda x: x // 10),
     )
 
-    # Lookup: nominal voltage -> LFP cells in series
-    _VOLTAGE_TO_CELLS: Final[dict[int, int]] = {12: 4, 24: 8, 36: 12, 48: 16}
-
     # Nominal LFP cell voltage used to convert lifetime energy (kWh) -> total charge (Ah)
     _LFP_CELL_VOLTAGE: Final[float] = 3.2
 
@@ -153,10 +150,6 @@ class BMS(BaseBMS):
         self._frame.clear()
         self._exp_len = 0
 
-        # Validate: function code, byte count, CRC
-        if frame[1] & 0x80:
-            self._log.debug("Modbus exception response: 0x%02X", frame[2])
-            return
         if not self._check_integrity(
             frame,
             crc_modbus,
