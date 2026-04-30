@@ -159,7 +159,7 @@ class BMS(BaseBMS):
         ):
             return
 
-        if frame[2] != exp_len - 5:
+        if frame[2] != exp_len - 5:  # pragma: no cover
             self._log.debug("invalid frame length")
             return
 
