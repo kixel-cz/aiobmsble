@@ -178,18 +178,14 @@ class BMS(BaseBMS):
 
         try:
             await self._await_msg(
-                BMS._cmd_modbus(dev_id=BMS._MB_ADDR, addr=BMS._REG_SN, count=BMS._SN_COUNT)
+                BMS._cmd_modbus(
+                    dev_id=BMS._MB_ADDR, addr=BMS._REG_SN, count=BMS._SN_COUNT
+                )
             )
+            if sn := b2str(self._msg[3 : 3 + BMS._SN_COUNT * 2]):
+                info["serial_number"] = sn
         except TimeoutError:
-            return info
-        sn = "".join(
-            chr(b)
-            for r in [int.from_bytes(self._msg[3 + i * 2: 5 + i * 2], "big") for i in range(8)]
-            for b in [(r >> 8) & 0xFF, r & 0xFF]
-            if 32 <= b < 127
-        ).strip()
-        if sn:
-            info["serial_number"] = sn
+            pass
 
         return info
 
