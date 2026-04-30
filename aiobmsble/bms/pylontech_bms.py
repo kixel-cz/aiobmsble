@@ -40,7 +40,7 @@ class BMS(BaseBMS):
         BMSDp("battery_level", 12, 2, False),
         BMSDp("battery_health", 14, 2, False),
         BMSDp("power", 16, 2, False, float),
-        BMSDp("design_capacity", 24, 2, False, lambda x: round(x * 0.1)),
+        BMSDp("design_capacity", 24, 2, False, lambda x: x // 10),
     )
 
     # Lookup: nominal voltage -> LFP cells in series
