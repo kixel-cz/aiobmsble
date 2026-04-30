@@ -64,7 +64,7 @@ class BMS(BaseBMS):
         if m:
             voltage_v   = int(m.group(1))
             capacity_ah = int(m.group(2))
-            return capacity_ah, BMS._VOLTAGE_TO_CELLS.get(voltage_v, 4)
+            return capacity_ah, voltage_v // 3
         return 100, 4
 
     # ------------------------------------------------------------------
