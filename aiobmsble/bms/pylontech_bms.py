@@ -35,7 +35,7 @@ class BMS(BaseBMS):
 
     # Byte offsets within the Modbus response payload: (register - 0x1016) * 2
     _FIELDS: Final[tuple[BMSDp, ...]] = (
-        BMSDp("voltage", 0, 2, False, lambda x: x * 0.01),
+        BMSDp("voltage", 0, 2, False, lambda x: x / 100),
         BMSDp("current", 2, 2, True,  lambda x: x / 10),
         BMSDp("battery_level", 12, 2, False),
         BMSDp("battery_health", 14, 2, False),
