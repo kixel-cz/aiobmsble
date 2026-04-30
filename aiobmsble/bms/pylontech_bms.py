@@ -209,7 +209,6 @@ class BMS(BaseBMS):
             result["design_capacity"] = self._capacity_ah
 
         # total_charge [Ah] from lifetime energy register (0x1020 x0.1 kWh)
-        lifetime_kwh = int.from_bytes(self._msg[23:25], "big") * 0.1
-        result["total_charge"] = int(lifetime_kwh * 1000 / self._nominal_voltage)
+        result["total_charge"] = int(int.from_bytes(self._msg[23:25], "big") * 100 / self._nominal_voltage)
 
         return result
