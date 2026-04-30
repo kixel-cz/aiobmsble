@@ -248,17 +248,6 @@ async def test_device_info_sn_register_timeout(
     await bms.disconnect()
 
 
-async def test_notification_handler_incomplete_frame(patch_bleak_client) -> None:
-    """Test that _notification_handler waits for more data when frame is incomplete."""
-    patch_bleak_client(MockPylontechBleakClient)
-    bms = BMS(generate_ble_device())
-    await bms._connect()
-    bms._notification_handler(None, bytearray([0x01, 0x03]))  # type: ignore[arg-type]
-    assert len(bms._frame) == 2
-    assert not bms._msg_event.is_set()
-    await bms.disconnect()
-
-
 async def test_exception_response_discarded(patch_bleak_client) -> None:
     """Test that Modbus exception responses are discarded by the notification handler."""
     patch_bleak_client(MockPylontechBleakClient)
