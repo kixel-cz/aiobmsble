@@ -75,6 +75,11 @@ _RESP_MAIN_24V: Final[bytearray] = bytearray(
     b"\x00\x5b\x00\x63\x00\x3f\x00\x00\x0b\x90\x03\xe8\x03\xe8\x9d\xd7"
 )
 
+_RESP_MAIN_ZERO_VOLT: Final[bytearray] = bytearray(
+    b"\x01\x03\x1a\x00\x00\xff\xd0\x0c\xf0\x0c\xef\x00\x96\x00\x96"
+    b"\x00\x5b\x00\x63\x00\x3f\x00\x00\x0b\x90\x03\xe8\x00\x00\x0c\xa3"
+)
+
 TX_UUID: Final[str] = BMS.uuid_tx()
 
 
@@ -408,3 +413,22 @@ def test_matcher_covers_rt_variants(
     adv = adv_dict_to_advdata(adv_dict)
     matched = any(_advertisement_matches(m, adv, "") for m in BMS.matcher_dict_list())
     assert matched is should_match
+
+async def test_gmod_calibration_zero_voltage(monkeypatch, patch_bleak_client) -> None:
+    """Test that calibration is skipped when voltage and dcap are zero."""
+    monkeypatch.setattr(
+        MockPylontechBleakClient, "RESP",
+        {**MockPylontechBleakClient.RESP, _REQ_MAIN: bytearray(_RESP_MAIN_ZERO_VOLT)},
+    )
+    patch_bleak_client(MockPylontechBleakClient)
+    bms = BMS(generate_ble_device(name="GMod"))
+    assert bms._cell_count == 4
+    assert bms._capacity_ah == 100
+
+    result = await bms.async_update()
+    # voltage=0 and dcap=0: calibration skipped, fallback values retained
+    assert bms._cell_count == 4
+    assert bms._capacity_ah == 100
+    # design_capacity falls back to _capacity_ah since register is 0
+    assert result["design_capacity"] == 100
+    await bms.disconnect()
