@@ -70,6 +70,11 @@ _RESP_SN_ZERO: Final[bytearray] = bytearray(
     b"\x01\x03\x10" + b"\x00" * 16 + b"\xe4\x59"
 )
 
+_RESP_MAIN_24V: Final[bytearray] = bytearray(
+    b"\x01\x03\x1a\x0a\x58\xff\xd0\x0c\xf0\x0c\xef\x00\x96\x00\x96"
+    b"\x00\x5b\x00\x63\x00\x3f\x00\x00\x0b\x90\x03\xe8\x03\xe8\x9d\xd7"
+)
+
 TX_UUID: Final[str] = BMS.uuid_tx()
 
 
@@ -217,6 +222,27 @@ async def test_gmod_calibration_from_voltage(patch_bleak_client) -> None:
         assert bms._capacity_ah == 100  # design_capacity from register = 100 Ah
         assert result["design_capacity"] == 100
         await bms.disconnect()
+
+
+async def test_gmod_calibration_24v(monkeypatch, patch_bleak_client) -> None:
+    """Test that cell_count is calibrated correctly for a 24V pack with generic name."""
+    monkeypatch.setattr(
+        MockPylontechBleakClient, "RESP",
+        {**MockPylontechBleakClient.RESP, _REQ_MAIN: bytearray(_RESP_MAIN_24V)},
+    )
+    patch_bleak_client(MockPylontechBleakClient)
+    bms = BMS(generate_ble_device(name="GMod"))
+    assert bms._cell_count == 4        # fallback před update
+    assert bms._capacity_ah == 100
+
+    result = await bms.async_update()
+    # voltage=26.48V → round(26.48 / 3.2) = round(8.275) = 8 cells
+    assert bms._cell_count == 8
+    assert bms._nominal_voltage == pytest.approx(25.6)
+    assert bms._capacity_ah == 100
+    # total_charge přepočítán s nominal=25.6V místo 12.8V
+    assert result["total_charge"] == int(296.0 * 1000 / 25.6)
+    await bms.disconnect()
 
 
 @pytest.fixture(
