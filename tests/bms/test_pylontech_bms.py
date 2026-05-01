@@ -157,7 +157,6 @@ async def test_device_info_sn_from_registers(patch_bleak_client) -> None:
 
 async def test_device_info_empty_sn_no_exception(monkeypatch, patch_bleak_client) -> None:
     """Test that all-zero SN registers do not raise an exception."""
-    # All-zero SN response: 01 03 10 + 16x 00 + CRC
     monkeypatch.setattr(
         MockPylontechBleakClient, "RESP",
         {**MockPylontechBleakClient.RESP, _REQ_SN: bytearray(_RESP_SN_ZERO)},
@@ -194,6 +193,30 @@ async def test_design_capacity_fallback(monkeypatch, patch_bleak_client) -> None
     assert result["design_capacity"] == 200
     assert result["cycle_charge"] == 182.0  # 200 * 91%
     await bms.disconnect()
+
+
+async def test_gmod_calibration_from_voltage(patch_bleak_client) -> None:
+    """Test that cell_count and capacity are calibrated from measured data for generic-name devices.
+
+    When the BLE advertisement uses the Telink default name ("GMod" / "GModule"),
+    _parse_model() falls back to (100 Ah, 4 cells). After the first successful
+    update the values are corrected from the measured voltage and design_capacity
+    register so that 24 V / 48 V packs are handled correctly.
+    """
+    patch_bleak_client(MockPylontechBleakClient)
+
+    for generic_name in ("GMod", "GModule"):
+        bms = BMS(generate_ble_device(name=generic_name))
+        # Before first update: fallback values
+        assert bms._cell_count == 4
+        assert bms._capacity_ah == 100
+
+        result = await bms.async_update()
+        # voltage=13.24 V → round(13.24 / 3.2) = round(4.14) = 4 cells
+        assert bms._cell_count == 4
+        assert bms._capacity_ah == 100  # design_capacity from register = 100 Ah
+        assert result["design_capacity"] == 100
+        await bms.disconnect()
 
 
 @pytest.fixture(
@@ -254,7 +277,6 @@ async def test_notification_handler_incomplete_frame(patch_bleak_client) -> None
     patch_bleak_client(MockPylontechBleakClient)
     bms = BMS(generate_ble_device())
     await bms._connect()
-    # Need at least 5 bytes with correct header before exp_len is set
     bms._notification_handler(None, bytearray([0x01, 0x03, 0x1a, 0x05, 0x2c]))  # type: ignore[arg-type]
     assert len(bms._frame) == 5
     assert not bms._msg_event.is_set()
@@ -296,9 +318,10 @@ async def test_notification_handler_bad_sof(patch_bleak_client) -> None:
         ("RT48100-000001", 100, 16),
         ("RT36050-000001",  50, 12),
         ("GModule",        100, 4),
+        ("GMod",           100, 4),
         ("",               100, 4),
     ],
-    ids=["RT12100", "RT12200", "RT24100", "RT48100", "RT36050", "GModule", "empty"],
+    ids=["RT12100", "RT12200", "RT24100", "RT48100", "RT36050", "GModule", "GMod", "empty"],
 )
 def test_parse_model(name: str, expected_capacity: int, expected_cells: int) -> None:
     """Test that model name is correctly parsed to capacity and cell count."""
@@ -320,6 +343,10 @@ async def test_capacity_from_device_name(patch_bleak_client) -> None:
     assert bms_200._cell_count  == 4
 
     bms_gmod = BMS(generate_ble_device(name="GModule"))
+    assert bms_gmod._capacity_ah == 100
+    assert bms_gmod._cell_count  == 4
+
+    bms_gmod = BMS(generate_ble_device(name="GMod"))
     assert bms_gmod._capacity_ah == 100
     assert bms_gmod._cell_count  == 4
 
@@ -346,13 +373,12 @@ def test_matcher_covers_rt_variants(
     local_name: str, has_service_uuid: bool, should_match: bool
 ) -> None:
     """Test that matcher_dict_list covers all RT voltage/capacity variants."""
-    # RT devices advertise 0x180F; GModule/GMod advertise vendor UUID
+    # All variants (RT*, GModule, GMod) advertise 0x180F in BLE advertisement packets.
     adv_dict: dict = {}
     if local_name:
         adv_dict["local_name"] = local_name
     if has_service_uuid:
-        svc = normalize_uuid_str("180f") if local_name.startswith("RT") else BMS.uuid_services()[0]
-        adv_dict["service_uuids"] = [svc]
+        adv_dict["service_uuids"] = [normalize_uuid_str("180f")]
     adv = adv_dict_to_advdata(adv_dict)
     matched = any(_advertisement_matches(m, adv, "") for m in BMS.matcher_dict_list())
     assert matched is should_match

@@ -15,11 +15,18 @@ RT12100, RT12200, RT24100, RT24200, and likely other RT variants.
 
 The Telink module advertises under two possible local names:
 - `RT12100-XXXXXX` (or RT24100 etc.) – set by Pylontech firmware
-- `GModule` – Telink default fallback, appears after factory reset or unpairing
+- `GModule` / `GMod` – Telink default fallback name;
 
-The vendor-specific service UUID is included in advertisement packets and is
-combined with the local name for more reliable discovery — in particular when
-the host Bluetooth stack has cached a stale device name.
+In all cases the BLE advertisement packet contains Battery Service UUID
+(`0x180F`) and HID UUID (`0x1812`). The vendor-specific service UUIDs
+(`00010203-0405-0607-0809-0a0b0c0d1910` and `...1912`) are only visible
+after a GATT connection is established and service discovery is complete —
+they are **not** present in advertisement packets.
+
+When the device name is `GMod` or `GModule`, the BMS model parameters
+(cell count, nominal voltage) cannot be determined from the name alone.
+They are calibrated automatically from the first successful data update
+using the measured pack voltage and the design capacity register (0x1022).
 
 ## Protocol
 

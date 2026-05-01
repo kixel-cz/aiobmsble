@@ -46,6 +46,10 @@ class BMS(BaseBMS):
     # Nominal LFP cell voltage used to convert lifetime energy (kWh) -> total charge (Ah)
     _LFP_CELL_VOLTAGE: Final[float] = 3.2
 
+    # Generic BLE module names used by Telink TLSR8266 when Pylontech firmware
+    # has not overwritten the default device name.
+    _GENERIC_NAMES: Final[frozenset[str]] = frozenset({"GMod", "GModule"})
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -73,16 +77,18 @@ class BMS(BaseBMS):
         """Return Bluetooth advertisement matchers.
 
         The BLE module (Telink TLSR8266) advertises under two possible local names:
-          - "RT12100-XXXXXX" (or RT24100 etc.) - set by Pylontech firmware,
-            advertises Battery Service UUID (0x180F)
+          - "RT12100-XXXXXX" (or RT24100 etc.) - set by Pylontech firmware
           - "GModule" / "GMod"                 - Telink default fallback name
-            (may be truncated in BLE advertisement packets),
-            advertises the vendor-specific service UUID
+            (may be truncated in BLE advertisement packets)
+
+        Both variants advertise Battery Service UUID (0x180F) and HID UUID (0x1812)
+        in the BLE advertisement packets. The vendor-specific service UUIDs are only
+        visible after GATT connection, not in advertisement packets.
         """
         return [
             {"local_name": "RT[0-9]*", "service_uuid": normalize_uuid_str("180f"), "connectable": True},
-            {"local_name": "GModule",  "service_uuid": BMS.uuid_services()[0],     "connectable": True},
-            {"local_name": "GMod",     "service_uuid": BMS.uuid_services()[0],     "connectable": True},
+            {"local_name": "GModule",  "service_uuid": normalize_uuid_str("180f"), "connectable": True},
+            {"local_name": "GMod",     "service_uuid": normalize_uuid_str("180f"), "connectable": True},
         ]
 
     @staticmethod
@@ -201,6 +207,24 @@ class BMS(BaseBMS):
         # Modbus exposes only min/max cell aggregates (0x1018, 0x1019), not per-cell values.
         result["cell_voltages"] = BMS._cell_voltages(self._msg, cells=2, start=7)
         result["temp_values"] = BMS._temp_values(self._msg, values=2, start=11, divider=10)
+
+        # When the BLE advertisement name is a generic Telink default ("GMod" /
+        # "GModule"), _parse_model() falls back to (100 Ah, 4 cells). Calibrate
+        # from the first real measurement so that 24 V / 48 V packs are handled
+        # correctly.
+        if self.name in BMS._GENERIC_NAMES:
+            voltage: float = result.get("voltage", 0.0)
+            if voltage > 0:
+                self._cell_count = max(1, round(voltage / BMS._LFP_CELL_VOLTAGE))
+                self._nominal_voltage = self._cell_count * BMS._LFP_CELL_VOLTAGE
+                self._log.debug(
+                    "calibrated from voltage %.2f V: cells=%d, nominal=%.1f V",
+                    voltage, self._cell_count, self._nominal_voltage,
+                )
+            dcap: int = result.get("design_capacity", 0)
+            if dcap:
+                self._capacity_ah = dcap
+                self._log.debug("calibrated capacity from register: %d Ah", dcap)
 
         # design_capacity from _FIELDS (0x1022 x0.1 Ah); fall back to name-parsed value.
         if not result.get("design_capacity"):
