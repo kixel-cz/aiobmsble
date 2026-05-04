@@ -69,6 +69,28 @@ class BMS(BaseBMS):
         return 100, 4
 
     # ------------------------------------------------------------------
+    # Initialisation
+    # ------------------------------------------------------------------
+
+    def __init__(
+        self,
+        ble_device: BLEDevice,
+        keep_alive: bool = True,
+        secret: str = "",
+        logger_name: str = "",
+    ) -> None:
+        """Initialize BMS members."""
+        super().__init__(ble_device, keep_alive, secret, logger_name)
+        self._msg: bytes = b""
+        self._exp_len: int = 0
+        self._capacity_ah, self._cell_count = BMS._parse_model(self.name)
+        self._nominal_voltage: float = self._cell_count * BMS._LFP_CELL_VOLTAGE
+        self._log.debug(
+            "model parsed from '%s': capacity=%d Ah, cells=%d, nominal=%.1f V",
+            self.name, self._capacity_ah, self._cell_count, self._nominal_voltage,
+        )
+
+    # ------------------------------------------------------------------
     # BaseBMS static interface
     # ------------------------------------------------------------------
 
@@ -105,28 +127,6 @@ class BMS(BaseBMS):
     def uuid_tx() -> str:
         """Return UUID of the write characteristic (Phone -> Module)."""
         return "00010203-0405-0607-0809-0a0b0c0d2b11"
-
-    # ------------------------------------------------------------------
-    # Initialisation
-    # ------------------------------------------------------------------
-
-    def __init__(
-        self,
-        ble_device: BLEDevice,
-        keep_alive: bool = True,
-        secret: str = "",
-        logger_name: str = "",
-    ) -> None:
-        """Initialize BMS members."""
-        super().__init__(ble_device, keep_alive, secret, logger_name)
-        self._msg: bytes = b""
-        self._exp_len: int = 0
-        self._capacity_ah, self._cell_count = BMS._parse_model(self.name)
-        self._nominal_voltage: float = self._cell_count * BMS._LFP_CELL_VOLTAGE
-        self._log.debug(
-            "model parsed from '%s': capacity=%d Ah, cells=%d, nominal=%.1f V",
-            self.name, self._capacity_ah, self._cell_count, self._nominal_voltage,
-        )
 
     # ------------------------------------------------------------------
     # Notification handler
